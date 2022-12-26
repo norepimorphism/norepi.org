@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: MPL-2.0
+
+license_template_path = "rustfmt.license-template"

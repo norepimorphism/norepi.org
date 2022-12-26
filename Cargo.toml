@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MPL-2.0
+
+[package]
+name = "norepi-site"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "norepi-http"
+path = "src/bin/http.rs"
+
+[[bin]]
+name = "norepi-smtp"
+path = "src/bin/smtp.rs"
+
+[dependencies]
+http = "0.2"
+hyper = { version = "0.14", features = ["http1", "http2", "server", "tcp", "runtime"] }
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[build-dependencies]
+generate-norepi-site = { git = "https://github.com/norepimorphism/generate-norepi-site.git" }
