@@ -84,6 +84,7 @@ async fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
 
 macro_rules! res {
     ($filename:literal $(-> $status:ident)? $(,)?) => {{
+        #[allow(unused_variables)]
         let status = StatusCode::OK;
         $(
             let status = StatusCode::$status;
@@ -100,13 +101,11 @@ pub async fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
     let res = match req.uri().path() {
         "/" => res!("index.html"),
         "/base.css" => res!("base.css"),
+        "/error.css" => res!("error.css"),
         "/contact" => res!("contact.html"),
         "/noctane" => res!("noctane.html"),
         "/source" => res!("source.html"),
-        _ => Resource {
-            status: StatusCode::NOT_FOUND,
-            content: "",
-        }
+        _ => res!("404.html" -> NOT_FOUND),
     };
 
     res.build()
