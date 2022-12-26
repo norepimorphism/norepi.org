@@ -38,6 +38,21 @@ async fn serve() -> Result<(), hyper::Error> {
         .await
 }
 
+macro_rules! res {
+    ($filename:literal $(-> $status:ident)? $(,)?) => {{
+        #[allow(unused_variables)]
+        let status = StatusCode::OK;
+        $(
+            let status = StatusCode::$status;
+        )?
+
+        Resource {
+            status,
+            content: include_str!(concat!(env!("OUT_DIR"), "/gen/", $filename)),
+        }
+    }};
+}
+
 async fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
     // The `uri` here is really a *request-target* as specified by Section 5.3 of RFC 7230; see
     // <https://httpwg.org/specs/rfc7230.html#request-target>.
@@ -68,13 +83,16 @@ async fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
                     .header("Allow", ALLOW)
                     .body(Body::empty())
             }
-        },
+        }
         _ => {
-            Response::builder()
-                .status(StatusCode::METHOD_NOT_ALLOWED)
-                .header("Allow", ALLOW)
-                .body(Body::empty())
-        },
+            res!("405.html" -> METHOD_NOT_ALLOWED)
+                .build()
+                .map(|res| {
+                    res.headers_mut().insert("Allow", HeaderValue::from_static(ALLOW));
+
+                    res
+                })
+        }
     }?;
 
     res.headers_mut().insert("Server", HeaderValue::from_static(SERVER));
@@ -82,23 +100,8 @@ async fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
     Ok(res)
 }
 
-macro_rules! res {
-    ($filename:literal $(-> $status:ident)? $(,)?) => {{
-        #[allow(unused_variables)]
-        let status = StatusCode::OK;
-        $(
-            let status = StatusCode::$status;
-        )?
-
-        Resource {
-            status,
-            content: include_str!(concat!(env!("OUT_DIR"), "/gen/", $filename)),
-        }
-    }};
-}
-
 pub async fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
-    let res = match req.uri().path() {
+    match req.uri().path() {
         "/" => res!("index.html"),
         "/base.css" => res!("base.css"),
         "/error.css" => res!("error.css"),
@@ -106,9 +109,8 @@ pub async fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
         "/noctane" => res!("noctane.html"),
         "/source" => res!("source.html"),
         _ => res!("404.html" -> NOT_FOUND),
-    };
-
-    res.build()
+    }
+    .build()
 }
 
 struct Resource {
