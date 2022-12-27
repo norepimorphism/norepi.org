@@ -130,6 +130,9 @@ fn check_request_is_well_formed(
     //   When sent by a user agent in a request, Accept-Encoding indicates the content codings
     //   acceptable in a response.
     //   ...
+    //   When sent by a server in response, Accept-Encoding provides information about which content
+    //   codings are preferred in the context of a subsequent request to the same resource.
+    //   ...
     //   An "identity" token is used as a synonym for "no encoding" in order to communicate when no
     //   encoding is preferred.
     //   ...
@@ -146,7 +149,18 @@ fn check_request_is_well_formed(
             //   with a 415 (Unsupported Media Type) status and include an Accept-Encoding header
             //   field in that response, allowing clients to distinguish between issues related to
             //   content codings and media types.
-            return Err(res!("415.html" -> UNSUPPORTED_MEDIA_TYPE).build());
+            return Err({
+                res!("415.html" -> UNSUPPORTED_MEDIA_TYPE)
+                    .build()
+                    .map(|res| {
+                        res.headers_mut().insert(
+                            "Accept-Encoding",
+                            HeaderValue::from_static("identity"),
+                        );
+
+                        res
+                    })
+            });
         }
     }
 
