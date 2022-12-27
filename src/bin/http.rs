@@ -126,6 +126,27 @@ fn check_request_is_well_formed(
         }
     }
 
+    // RFC 9110, Section 12.5.3:
+    //   When sent by a user agent in a request, Accept-Encoding indicates the content codings
+    //   acceptable in a response.
+    //   ...
+    //   An "identity" token is used as a synonym for "no encoding" in order to communicate when no
+    //   encoding is preferred.
+    //
+    // See <https://httpwg.org/specs/rfc9110.html#rfc.section.12.5.3>.
+    if let Some(value) = headers.get("Accept-Encoding") {
+        // Resource content will be returned as-is; hence, we will only accept `Accept-Encoding`
+        // headers that request `identity`.
+        if !accept_encoding_requests_identity(value) {
+            // RFC 9110, Section 12.5.3:
+            //   Servers that fail a request due to an unsupported content coding ought to respond
+            //   with a 415 (Unsupported Media Type) status and include an Accept-Encoding header
+            //   field in that response, allowing clients to distinguish between issues related to
+            //   content codings and media types.
+            return Err(res!("415.html" -> UNSUPPORTED_MEDIA_TYPE).build());
+        }
+    }
+
     if let Some(value) = headers.get("Accept-Language") {
         if !accept_language_requests_en(value) {
             return not_acceptable();
@@ -136,10 +157,12 @@ fn check_request_is_well_formed(
 }
 
 fn accept_charset_requests_utf8(value: &HeaderValue) -> bool {
+    let bytes = value.as_bytes();
+
     // RFC 9110, Section 12.5.2:
     //   The special value "*", if present in the Accept-Charset header field, matches every charset
     //   that is not mentioned elsewhere in the field.
-    if value.as_bytes().contains(&b'*') {
+    if bytes.contains(&b'*') {
         // If a `*` is present---even if it has a low priority---UTF-8 will be requested. Either
         // both UTF-8 and `*` are listed, in which case UTF-8 is obviously requested, or only `*` is
         // listed, in which case UTF-8 is indirectly requested through use of this wildcard.
@@ -153,8 +176,7 @@ fn accept_charset_requests_utf8(value: &HeaderValue) -> bool {
     // positives if a listed charset contains the case-insensitive string "utf-8" but *does not*, in
     // full, match the string "utf-8".
     let utf8_token = b"utf-8";
-    if value
-        .as_bytes()
+    if bytes
         // From `value`, generate overlapping byte sequences each with the length of `utf8_token`.
         .windows(utf8_token.len())
         // Test each byte sequence to see if it matches `utf8_token`.
@@ -171,9 +193,66 @@ fn accept_charset_requests_utf8(value: &HeaderValue) -> bool {
     false
 }
 
-fn accept_language_requests_en(_value: &HeaderValue) -> bool {
-    // TODO
-    true
+fn accept_encoding_requests_identity(value: &HeaderValue) -> bool {
+    if value.is_empty() {
+        return true;
+    }
+
+    let bytes = value.as_bytes();
+
+    if bytes.contains(&b'*') {
+        return true;
+    }
+
+    let identity_token = b"identity";
+    if bytes
+        .windows(identity_token.len())
+        .find(|token| token.eq_ignore_ascii_case(identity_token))
+        .is_some()
+    {
+        return true;
+    }
+
+    false
+}
+
+fn accept_language_requests_en(value: &HeaderValue) -> bool {
+    let bytes = value.as_bytes();
+
+    // RFC 4647, Section 3.3.1:
+    //   The special range "*" in a language priority list matches any tag.
+    //
+    // See <https://www.rfc-editor.org/rfc/rfc4647.html#section-3.3.1>.
+    if bytes.contains(&b'*') {
+        return true;
+    }
+
+    let en_token = b"en";
+    if let Some(start_idx) = bytes
+        .windows(en_token.len())
+        .enumerate()
+        .find(|(_, token)| token.eq_ignore_ascii_case(en_token))
+        .map(|(idx, _)| idx)
+    {
+        let has_prev_whitespace = start_idx
+            .checked_sub(1)
+            .map(|idx| {
+                // SAFETY: TODO
+                unsafe { bytes.get_unchecked(idx) }.is_ascii_whitespace()
+            })
+            .unwrap_or(true);
+        let has_next_whitespace = bytes
+            .get(start_idx + en_token.len())
+            .map(|c| c.is_ascii_whitespace())
+            .unwrap_or(true);
+
+        let is_full_word = has_prev_whitespace && has_next_whitespace;
+        if is_full_word {
+            return true;
+        }
+    }
+
+    false
 }
 
 async fn respond_to_well_formed_request(
