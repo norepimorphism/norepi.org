@@ -132,6 +132,9 @@ fn check_request_is_well_formed(
     //   ...
     //   An "identity" token is used as a synonym for "no encoding" in order to communicate when no
     //   encoding is preferred.
+    //   ...
+    //   If no Accept-Encoding header field is in the request, any content coding is considered
+    //   acceptable by the user agent.
     //
     // See <https://httpwg.org/specs/rfc9110.html#rfc.section.12.5.3>.
     if let Some(value) = headers.get("Accept-Encoding") {
@@ -147,6 +150,11 @@ fn check_request_is_well_formed(
         }
     }
 
+    // RFC 9110, Section 12.5.4:
+    //   The "Accept-Language" header field can be used by user agents to indicate the set of
+    //   natural languages that are preferred in the response.
+    //
+    // See <https://httpwg.org/specs/rfc9110.html#rfc.section.12.5.4>.
     if let Some(value) = headers.get("Accept-Language") {
         if !accept_language_requests_en(value) {
             return not_acceptable();
@@ -166,6 +174,8 @@ fn accept_charset_requests_utf8(value: &HeaderValue) -> bool {
         // If a `*` is present---even if it has a low priority---UTF-8 will be requested. Either
         // both UTF-8 and `*` are listed, in which case UTF-8 is obviously requested, or only `*` is
         // listed, in which case UTF-8 is indirectly requested through use of this wildcard.
+
+        // TODO: This fails when `*` is qualified with `q=0`.
         return true;
     }
 
@@ -187,6 +197,7 @@ fn accept_charset_requests_utf8(value: &HeaderValue) -> bool {
         })
         .is_some()
     {
+        // TODO: This fails when `utf-8` is qualified with `q=0`.
         return true;
     }
 
@@ -194,13 +205,21 @@ fn accept_charset_requests_utf8(value: &HeaderValue) -> bool {
 }
 
 fn accept_encoding_requests_identity(value: &HeaderValue) -> bool {
+    // RFC 9110, Section 12.5.3:
+    //   An Accept-Encoding header field with a field value that is empty implies that the user
+    //   agent does not want any content coding in response.
     if value.is_empty() {
+        // Ostensibly, "does not want any content coding" implies the `identity` value.
         return true;
     }
 
     let bytes = value.as_bytes();
 
+    // RFC 9110, Section 12.5.3:
+    //   The asterisk "*" symbol in an Accept-Encoding field matches any available content coding
+    //   not explicitly listed in the field.
     if bytes.contains(&b'*') {
+        // TODO: This fails when `*` is qualified with `q=0`.
         return true;
     }
 
@@ -210,6 +229,7 @@ fn accept_encoding_requests_identity(value: &HeaderValue) -> bool {
         .find(|token| token.eq_ignore_ascii_case(identity_token))
         .is_some()
     {
+        // TODO: This fails when `identity` is qualified with `q=0`.
         return true;
     }
 
@@ -224,6 +244,7 @@ fn accept_language_requests_en(value: &HeaderValue) -> bool {
     //
     // See <https://www.rfc-editor.org/rfc/rfc4647.html#section-3.3.1>.
     if bytes.contains(&b'*') {
+        // TODO: This fails when `*` is qualified with `q=0`.
         return true;
     }
 
@@ -248,6 +269,7 @@ fn accept_language_requests_en(value: &HeaderValue) -> bool {
 
         let is_full_word = has_prev_whitespace && has_next_whitespace;
         if is_full_word {
+            // TODO: This fails when `en` is qualified with `q=0`.
             return true;
         }
     }
