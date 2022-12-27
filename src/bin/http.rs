@@ -297,12 +297,6 @@ async fn respond_to_well_formed_request(
         }
         // `OPTIONS` lists all HTTP methods supported by a resource in the `Allow` header.
         &Method::OPTIONS => {
-            if req.uri() == "*" {
-                Response::builder()
-                    .status(StatusCode::NO_CONTENT)
-                    .body(Body::empty())
-            } else {
-                // The HTTP methods offered by *proxie*.
             Response::builder()
                 .status(StatusCode::NO_CONTENT)
                 .header("Allow", ALLOW)
