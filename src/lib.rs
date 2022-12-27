@@ -44,6 +44,8 @@ fn try_setup_tracing() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     EnvFilter::default()
                 }
             }
+            // *hyper* is very noisy.
+            .add_directive("hyper=error".parse()?)
         })
         .with_thread_names(false)
         .try_init()
