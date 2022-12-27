@@ -261,18 +261,41 @@ fn iter_accept_prefs<'a>(
 ) -> Result<impl Iterator<Item = AcceptPreference<'a>>, ()> {
     value
         .as_bytes()
+        // Preferences are separated by commas `,`. There are no trailing commas.
         .split(|c| *c == b',')
+        // Names and qparams are separated by semicolons `;`. There are no trailing semicolons.
         .map(|pref| pref.split(|c| *c == b';'))
         .map(|parts| {
-            let name = parts.next().ok_or(())?;
+            // The first part of a preference is the name.
+            let name = parts
+                .next()
+                // The name may be prefixed by whitespace.
+                .map(|it| it.trim_ascii_start())
+                // It is an error if the name is not present.
+                .ok_or(())?;
+            // The second part of a preference is the qparam. It is optional.
             let qparam = parts.next();
             let qvalue = match qparam {
-                Some(it) => Some(it.trim_ascii_start().strip_prefix(b"q=")?),
+                Some(it) => Some({
+                    it
+                        // The qparam may be prefixed by whitespace.
+                        .trim_ascii_start()
+                        // The qvalue is always prefixed by the string "q=". This string must appear
+                        // as-is without alternative capitalization and without whitespace.
+                        .strip_prefix(b"q=")
+                        // It is an error if the "q=" prefix is not present.
+                        .ok_or(())?
+                }),
                 None => None,
             };
+            // It is an error if any additional parts are present.
+            if parts.next().is_some() {
+                return Err(());
+            }
 
             Ok(AcceptPreference { name, qvalue })
         })
+        // Propagate any errors.
         .collect()
 }
 
