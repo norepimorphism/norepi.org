@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use http::HeaderValue;
+use http::{header, HeaderValue};
 use hyper::{
     server::conn::AddrStream,
     service::{make_service_fn, service_fn},
@@ -80,14 +80,14 @@ async fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
     //   Content-Language MAY be applied to any media type---it is not limited to textual documents.
     //
     // See <https://httpwg.org/specs/rfc9110.html#rfc.section.8.5>.
-    headers.insert("Content-Language", HeaderValue::from_static("en"));
+    headers.insert(header::CONTENT_LANGUAGE, HeaderValue::from_static("en"));
     // RFC 9110, Section 10.2.4:
     //   The "Server" header field contains information about the software used by the origin server
     //   to handle the request.... An origin server MAY generate a Server header field in its
     //   responses.
     //
     // See <https://httpwg.org/specs/rfc9110.html#rfc.section.10.2.4>.
-    headers.insert("Server", HeaderValue::from_static(SERVER));
+    headers.insert(header::SERVER, HeaderValue::from_static(SERVER));
 
     Ok(res)
 }
@@ -118,7 +118,7 @@ fn check_request_is_well_formed(
     //   so.
     //
     // See <https://httpwg.org/specs/rfc9110.html#rfc.section.12.5.2>.
-    if let Some(value) = headers.get("Accept-Charset") {
+    if let Some(value) = headers.get(header::ACCEPT_CHARSET) {
         // Despite the deprecation, in the interest of compatibility, we will accept
         // `Accept-Charset` headers that request UTF-8.
         if !accept_charset_requests_utf8(value) {
@@ -140,7 +140,7 @@ fn check_request_is_well_formed(
     //   acceptable by the user agent.
     //
     // See <https://httpwg.org/specs/rfc9110.html#rfc.section.12.5.3>.
-    if let Some(value) = headers.get("Accept-Encoding") {
+    if let Some(value) = headers.get(header::ACCEPT_ENCODING) {
         // Resource content will be returned as-is; hence, we will only accept `Accept-Encoding`
         // headers that request `identity`.
         if !accept_encoding_requests_identity(value) {
@@ -154,7 +154,7 @@ fn check_request_is_well_formed(
                     .build()
                     .map(|res| {
                         res.headers_mut().insert(
-                            "Accept-Encoding",
+                            header::ACCEPT_ENCODING,
                             HeaderValue::from_static("identity"),
                         );
 
@@ -169,7 +169,7 @@ fn check_request_is_well_formed(
     //   natural languages that are preferred in the response.
     //
     // See <https://httpwg.org/specs/rfc9110.html#rfc.section.12.5.4>.
-    if let Some(value) = headers.get("Accept-Language") {
+    if let Some(value) = headers.get(header::ACCEPT_LANGUAGE) {
         if !accept_language_requests_en(value) {
             return not_acceptable();
         }
