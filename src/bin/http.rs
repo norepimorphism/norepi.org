@@ -224,11 +224,18 @@ async fn respond_to_well_formed_request(
                     .body(Body::empty())
             } else {
                 // The HTTP methods offered by *proxie*.
-                Response::builder()
-                    .status(StatusCode::NO_CONTENT)
-                    .header("Allow", ALLOW)
-                    .body(Body::empty())
-            }
+            Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .header("Allow", ALLOW)
+                .body(Body::empty())
+        }
+        &Method::POST
+        | &Method::PUT
+        | &Method::DELETE
+        | &Method::CONNECT
+        | &Method::TRACE
+        | &Method::PATCH => {
+            res!("405.html" -> METHOD_NOT_ALLOWED).build()
         }
         // RFC 9110, Section 15.6.2:
         //   [501 (Not Implemented)] is the appropriate response when the server does not recognize
