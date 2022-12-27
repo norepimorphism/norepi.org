@@ -308,11 +308,6 @@ async fn respond_to_well_formed_request(
             get(req).await.map(|mut res| {
                 // Discard the body.
                 *res.body_mut() = Body::empty();
-                // Discard headers that RFC 9110 suggests "might not [be] generated within a HEAD
-                // response."
-                for name in ["Content-Length", "Vary"] {
-                    let _ = res.headers_mut().remove(name);
-                }
 
                 res
             })
