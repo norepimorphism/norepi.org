@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+#![feature(byte_slice_trim_ascii, let_else)]
+
 use http::{header, HeaderValue};
 use hyper::{
     server::conn::AddrStream,
@@ -152,7 +154,7 @@ fn check_request_is_well_formed(
             return Err({
                 res!("415.html" -> UNSUPPORTED_MEDIA_TYPE)
                     .build()
-                    .map(|res| {
+                    .map(|mut res| {
                         res.headers_mut().insert(
                             header::ACCEPT_ENCODING,
                             HeaderValue::from_static("identity"),
@@ -184,20 +186,23 @@ fn accept_charset_requests_utf8(value: &HeaderValue) -> bool {
         return false;
     };
 
-    // RFC 9110, Section 12.5.2:
-    //   The special value "*", if present in the Accept-Charset header field, matches every charset
-    //   that is not mentioned elsewhere in the field.
-    if prefs.any(|pref| pref.is_acceptable_with_name(b"*")) {
-        // If a `*` is present---even if it has a low priority---UTF-8 will be requested. Either
-        // both UTF-8 and `*` are listed, in which case UTF-8 is obviously requested, or only `*` is
-        // listed, in which case UTF-8 is indirectly requested through use of this wildcard.
-        return true;
-    }
+    for pref in prefs {
+        // RFC 9110, Section 12.5.2:
+        //   The special value "*", if present in the Accept-Charset header field, matches every
+        //   charset that is not mentioned elsewhere in the field.
+        if pref.is_acceptable_with_name(b"*") {
+            // If a `*` is present---even if it has a low priority---UTF-8 will be requested. Either
+            // both UTF-8 and `*` are listed, in which case UTF-8 is obviously requested, or only
+            // `*` is listed, in which case UTF-8 is indirectly requested through use of this
+            // wildcard.
+            return true;
+        }
 
-    // We will also check if the field contains the case-insensitive literal "UTF-8", in which case
-    // UTF-8 is explicitly requested.
-    if prefs.any(|pref| pref.is_acceptable_with_name(b"utf-8")) {
-        return true;
+        // We will also check if the field contains the case-insensitive literal "UTF-8", in which
+        // case UTF-8 is explicitly requested.
+        if pref.is_acceptable_with_name(b"utf-8") {
+            return true;
+        }
     }
 
     false
@@ -217,17 +222,19 @@ fn accept_encoding_requests_identity(value: &HeaderValue) -> bool {
         return false;
     };
 
-    // RFC 9110, Section 12.5.3:
-    //   The asterisk "*" symbol in an Accept-Encoding field matches any available content coding
-    //   not explicitly listed in the field.
-    if prefs.any(|pref| pref.is_acceptable_with_name(b"*")) {
-        return true;
-    }
+    for pref in prefs {
+        // RFC 9110, Section 12.5.3:
+        //   The asterisk "*" symbol in an Accept-Encoding field matches any available content
+        //   coding not explicitly listed in the field.
+        if pref.is_acceptable_with_name(b"*") {
+            return true;
+        }
 
-    // We will also check if the field contains the case-insensitive literal "identity", in which
-    // no content coding is explicitly requested.
-    if prefs.any(|pref| pref.is_acceptable_with_name(b"identity")) {
-        return true;
+        // We will also check if the field contains the case-insensitive literal "identity", in
+        // which no content coding is explicitly requested.
+        if pref.is_acceptable_with_name(b"identity") {
+            return true;
+        }
     }
 
     false
@@ -239,18 +246,20 @@ fn accept_language_requests_en(value: &HeaderValue) -> bool {
         return false;
     };
 
-    // RFC 4647, Section 3.3.1:
-    //   The special range "*" in a language priority list matches any tag.
-    //
-    // See <https://www.rfc-editor.org/rfc/rfc4647.html#section-3.3.1>.
-    if prefs.any(|pref| pref.is_acceptable_with_name(b"*")) {
-        return true;
-    }
+    for pref in prefs {
+        // RFC 4647, Section 3.3.1:
+        //   The special range "*" in a language priority list matches any tag.
+        //
+        // See <https://www.rfc-editor.org/rfc/rfc4647.html#section-3.3.1>.
+        if pref.is_acceptable_with_name(b"*") {
+            return true;
+        }
 
-    // We will also check if the field contains the case-insensitive literal "en", in which English
-    // is explicitly requested.
-    if prefs.any(|pref| pref.is_acceptable_with_name(b"en")) {
-        return true;
+        // We will also check if the field contains the case-insensitive literal "en", in which
+        // English is explicitly requested.
+        if pref.is_acceptable_with_name(b"en") {
+            return true;
+        }
     }
 
     false
@@ -258,14 +267,14 @@ fn accept_language_requests_en(value: &HeaderValue) -> bool {
 
 fn iter_accept_prefs<'a>(
     value: &'a HeaderValue,
-) -> Result<impl Iterator<Item = AcceptPreference<'a>>, ()> {
+) -> Result<impl 'a + Iterator<Item = AcceptPreference<'a>>, ()> {
     value
         .as_bytes()
         // Preferences are separated by commas `,`. There are no trailing commas.
         .split(|c| *c == b',')
         // Names and qparams are separated by semicolons `;`. There are no trailing semicolons.
         .map(|pref| pref.split(|c| *c == b';'))
-        .map(|parts| {
+        .map(|mut parts| {
             // The first part of a preference is the name.
             let name = parts
                 .next()
@@ -295,8 +304,10 @@ fn iter_accept_prefs<'a>(
 
             Ok(AcceptPreference { name, qvalue })
         })
-        // Propagate any errors.
-        .collect()
+        .collect::<Vec<Result<AcceptPreference, ()>>>()
+        .into_iter()
+        .collect::<Result<Vec<AcceptPreference>, ()>>()
+        .map(|inner| inner.into_iter())
 }
 
 struct AcceptPreference<'a> {

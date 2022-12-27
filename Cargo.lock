@@ -160,7 +160,7 @@ dependencies = [
 [[package]]
 name = "generate-norepi-site"
 version = "0.1.0"
-source = "git+https://github.com/norepimorphism/generate-norepi-site.git#5a3370380740c772ab2d108ac44d3fef516b9b33"
+source = "git+https://github.com/norepimorphism/generate-norepi-site.git#75cdd5b609cf7d02387244e55cde7f8534553fb7"
 dependencies = [
  "css-minify 0.3.1",
  "minify-html",
