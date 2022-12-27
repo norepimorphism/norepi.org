@@ -179,39 +179,24 @@ fn check_request_is_well_formed(
 }
 
 fn accept_charset_requests_utf8(value: &HeaderValue) -> bool {
-    let bytes = value.as_bytes();
+    let Ok(prefs) = iter_accept_prefs(value) else {
+        // The header is malformed.
+        return false;
+    };
 
     // RFC 9110, Section 12.5.2:
     //   The special value "*", if present in the Accept-Charset header field, matches every charset
     //   that is not mentioned elsewhere in the field.
-    if bytes.contains(&b'*') {
+    if prefs.any(|pref| pref.is_acceptable_with_name(b"*")) {
         // If a `*` is present---even if it has a low priority---UTF-8 will be requested. Either
         // both UTF-8 and `*` are listed, in which case UTF-8 is obviously requested, or only `*` is
         // listed, in which case UTF-8 is indirectly requested through use of this wildcard.
-
-        // TODO: This fails when `*` is qualified with `q=0`.
         return true;
     }
 
     // We will also check if the field contains the case-insensitive literal "UTF-8", in which case
     // UTF-8 is explicitly requested.
-    //
-    // TODO: The algorithm used here is not particularly rigorous, and it may generate false
-    // positives if a listed charset contains the case-insensitive string "utf-8" but *does not*, in
-    // full, match the string "utf-8".
-    let utf8_token = b"utf-8";
-    if bytes
-        // From `value`, generate overlapping byte sequences each with the length of `utf8_token`.
-        .windows(utf8_token.len())
-        // Test each byte sequence to see if it matches `utf8_token`.
-        .find(|token| {
-            // `Accept-Charset` is not case-sensitive, so we must be careful to compare
-            // insensitively.
-            token.eq_ignore_ascii_case(utf8_token)
-        })
-        .is_some()
-    {
-        // TODO: This fails when `utf-8` is qualified with `q=0`.
+    if prefs.any(|pref| pref.is_acceptable_with_name(b"utf-8")) {
         return true;
     }
 
@@ -227,23 +212,21 @@ fn accept_encoding_requests_identity(value: &HeaderValue) -> bool {
         return true;
     }
 
-    let bytes = value.as_bytes();
+    let Ok(prefs) = iter_accept_prefs(value) else {
+        // The header is malformed.
+        return false;
+    };
 
     // RFC 9110, Section 12.5.3:
     //   The asterisk "*" symbol in an Accept-Encoding field matches any available content coding
     //   not explicitly listed in the field.
-    if bytes.contains(&b'*') {
-        // TODO: This fails when `*` is qualified with `q=0`.
+    if prefs.any(|pref| pref.is_acceptable_with_name(b"*")) {
         return true;
     }
 
-    let identity_token = b"identity";
-    if bytes
-        .windows(identity_token.len())
-        .find(|token| token.eq_ignore_ascii_case(identity_token))
-        .is_some()
-    {
-        // TODO: This fails when `identity` is qualified with `q=0`.
+    // We will also check if the field contains the case-insensitive literal "identity", in which
+    // no content coding is explicitly requested.
+    if prefs.any(|pref| pref.is_acceptable_with_name(b"identity")) {
         return true;
     }
 
@@ -251,44 +234,68 @@ fn accept_encoding_requests_identity(value: &HeaderValue) -> bool {
 }
 
 fn accept_language_requests_en(value: &HeaderValue) -> bool {
-    let bytes = value.as_bytes();
+    let Ok(prefs) = iter_accept_prefs(value) else {
+        // The header is malformed.
+        return false;
+    };
 
     // RFC 4647, Section 3.3.1:
     //   The special range "*" in a language priority list matches any tag.
     //
     // See <https://www.rfc-editor.org/rfc/rfc4647.html#section-3.3.1>.
-    if bytes.contains(&b'*') {
-        // TODO: This fails when `*` is qualified with `q=0`.
+    if prefs.any(|pref| pref.is_acceptable_with_name(b"*")) {
         return true;
     }
 
-    let en_token = b"en";
-    if let Some(start_idx) = bytes
-        .windows(en_token.len())
-        .enumerate()
-        .find(|(_, token)| token.eq_ignore_ascii_case(en_token))
-        .map(|(idx, _)| idx)
-    {
-        let has_prev_whitespace = start_idx
-            .checked_sub(1)
-            .map(|idx| {
-                // SAFETY: TODO
-                unsafe { bytes.get_unchecked(idx) }.is_ascii_whitespace()
-            })
-            .unwrap_or(true);
-        let has_next_whitespace = bytes
-            .get(start_idx + en_token.len())
-            .map(|c| c.is_ascii_whitespace())
-            .unwrap_or(true);
-
-        let is_full_word = has_prev_whitespace && has_next_whitespace;
-        if is_full_word {
-            // TODO: This fails when `en` is qualified with `q=0`.
-            return true;
-        }
+    // We will also check if the field contains the case-insensitive literal "en", in which English
+    // is explicitly requested.
+    if prefs.any(|pref| pref.is_acceptable_with_name(b"en")) {
+        return true;
     }
 
     false
+}
+
+fn iter_accept_prefs<'a>(
+    value: &'a HeaderValue,
+) -> Result<impl Iterator<Item = AcceptPreference<'a>>, ()> {
+    value
+        .as_bytes()
+        .split(|c| *c == b',')
+        .map(|pref| pref.split(|c| *c == b';'))
+        .map(|parts| {
+            let name = parts.next().ok_or(())?;
+            let qparam = parts.next();
+            let qvalue = match qparam {
+                Some(it) => Some(it.trim_ascii_start().strip_prefix(b"q=")?),
+                None => None,
+            };
+
+            Ok(AcceptPreference { name, qvalue })
+        })
+        .collect()
+}
+
+struct AcceptPreference<'a> {
+    name: &'a [u8],
+    qvalue: Option<&'a [u8]>,
+}
+
+impl<'a> AcceptPreference<'a> {
+    fn is_acceptable_with_name(&'a self, name: &[u8]) -> bool {
+        self.name.eq_ignore_ascii_case(name) && self.is_acceptable()
+    }
+
+    fn is_acceptable(&'a self) -> bool {
+        // RFC 9110, Section 12.4.2:
+        //   The weight is normalized to a real number in the range 0 through 1, where 0.001 is the
+        //   least preferred and 1 is the most preferred; a value of 0 means "not acceptable". If no
+        //   "q" parameter is present, the default weight is 1.
+        self.qvalue.map(|val| {
+            !matches!(val, b"0" | b"0." | b"0.0" | b"0.00" | b"0.000")
+        })
+        .unwrap_or(true)
+    }
 }
 
 async fn respond_to_well_formed_request(

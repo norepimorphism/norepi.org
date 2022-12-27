@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+#![feature(byte_slice_trim_ascii, let_else)]
+
 use std::{future::Future, process};
 
 pub async fn run<E, O>(serve: impl Fn() -> O) -> process::ExitCode
