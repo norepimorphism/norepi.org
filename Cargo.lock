@@ -549,6 +549,7 @@ dependencies = [
  "generate-norepi-site",
  "http",
  "hyper",
+ "lazy_static",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -35,7 +35,7 @@ async fn serve() -> Result<(), hyper::Error> {
 
             async move {
                 Ok::<_, http::Error>(service_fn(move |req| async move {
-                    if let Some(entry) = norepi_site::blocklist::find(remote_addr) {
+                    if let Some(entry) = norepi_site::blocklist::find(&remote_addr.ip()) {
                         tracing::warn!("request was blocked: {:#?}", entry);
 
                         // RFC 9110, Section 15.5.4:

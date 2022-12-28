@@ -20,6 +20,7 @@ path = "src/bin/smtp.rs"
 chrono = "0.4"
 http = "0.2"
 hyper = { version = "0.14", features = ["http1", "http2", "server", "tcp", "runtime"] }
+lazy_static = "1.4"
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
