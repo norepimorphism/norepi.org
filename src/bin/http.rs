@@ -2,7 +2,7 @@
 
 #![feature(byte_slice_trim_ascii, ip)]
 
-use std::{fmt, fs, io::Write as _};
+use std::{fmt, fs, io::{self, Write as _}};
 
 use http::{header, HeaderValue};
 use hyper::{
@@ -21,10 +21,10 @@ static ALLOW: &str = "GET, HEAD, OPTIONS";
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    norepi_site::run(serve).await
+    norepi_site::run(run).await
 }
 
-async fn serve() -> Result<(), hyper::Error> {
+async fn run() -> Result<(), hyper::Error> {
     let mut report = fs::OpenOptions::new()
         .write(true)
         .append(true)
@@ -36,8 +36,15 @@ async fn serve() -> Result<(), hyper::Error> {
             writeln!(report, "IP Address,TCP Port,HTTP Method,Resource URI,User Agent");
         }
     }
-    let mut report = csv::Writer::from_writer(report);
 
+    let mut report = csv::Writer::from_writer(report);
+    serve(&mut report).await?;
+    report.flush().expect("failed to flush CSV writer");
+
+    Ok(())
+}
+
+async fn serve<T: io::Write>(report: &mut csv::Writer<T>) -> Result<(), hyper::Error> {
     let local_addr = ([0; 4], 80).into();
     let incoming = AddrIncoming::bind(&local_addr)?;
     // let server = rustls::ServerConfig::builder()
