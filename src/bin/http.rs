@@ -2,7 +2,7 @@
 
 #![feature(byte_slice_trim_ascii, ip)]
 
-use std::{fmt, fs};
+use std::{fmt, fs, io::Write as _};
 
 use http::{header, HeaderValue};
 use hyper::{
@@ -25,12 +25,17 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn serve() -> Result<(), hyper::Error> {
-    let report = fs::OpenOptions::new()
+    let mut report = fs::OpenOptions::new()
         .write(true)
         .append(true)
         .create(true)
-        .open("~/report.csv")
+        .open("~/http.csv")
         .expect("failed to open report file");
+    if let Ok(meta) = report.metadata() {
+        if meta.len() == 0 {
+            writeln!(report, "IP Address,TCP Port,HTTP Method,Resource URI,User Agent");
+        }
+    }
     let mut report = csv::Writer::from_writer(report);
 
     let local_addr = ([0; 4], 80).into();
