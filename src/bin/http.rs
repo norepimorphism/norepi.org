@@ -27,11 +27,11 @@ async fn main() -> std::process::ExitCode {
 async fn serve() -> Result<(), hyper::Error> {
     let local_addr = ([0; 4], 80).into();
     let incoming = AddrIncoming::bind(&local_addr)?;
-    let server = rustls::ServerConfig::builder()
-        .with_safe_defaults()
-        .with_no_client_auth()
-        .with_single_cert(tls_certs(), tls_key())
-        .expect("failed to build server configuration");
+    // let server = rustls::ServerConfig::builder()
+    //     .with_safe_defaults()
+    //     .with_no_client_auth()
+    //     .with_single_cert(tls_certs(), tls_key())
+    //     .expect("failed to build server configuration");
 
     Server::builder(incoming)
         .serve(make_service_fn(|sock: &AddrStream| {
