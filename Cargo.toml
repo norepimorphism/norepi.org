@@ -9,6 +9,10 @@ edition = "2021"
 path = "src/lib.rs"
 
 [[bin]]
+name = "norepi-echo"
+path = "src/bin/echo.rs"
+
+[[bin]]
 name = "norepi-http"
 path = "src/bin/http.rs"
 
