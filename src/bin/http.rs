@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-#![feature(byte_slice_trim_ascii, let_else)]
+#![feature(byte_slice_trim_ascii, ip)]
 
-use std::fmt;
+use std::{fmt, fs};
 
 use http::{header, HeaderValue};
 use hyper::{
@@ -25,6 +25,14 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn serve() -> Result<(), hyper::Error> {
+    let report = fs::OpenOptions::new()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open("~/report.csv")
+        .expect("failed to open report file");
+    let mut report = csv::Writer::from_writer(report);
+
     let local_addr = ([0; 4], 80).into();
     let incoming = AddrIncoming::bind(&local_addr)?;
     // let server = rustls::ServerConfig::builder()
@@ -40,6 +48,21 @@ async fn serve() -> Result<(), hyper::Error> {
 
             async move {
                 Ok::<_, http::Error>(service_fn(move |req| async move {
+                    // | IP Address | TCP Port | HTTP Method | Resouce URI | User Agent |
+                    // |------------|----------|-------------|-------------|------------|
+                    let _ = report.write_field(remote_addr.ip().to_canonical().to_string());
+                    let _ = report.write_field(remote_addr.port().to_string());
+                    let _ = report.write_field(req.method().as_str());
+                    let _ = report.write_field(req.uri().to_string());
+                    let _ = report.write_field({
+                        req
+                            .headers()
+                            .get(header::USER_AGENT)
+                            .map(|it| it.as_bytes())
+                            .unwrap_or(b"")
+                    });
+                    let _ = report.write_record(None::<&[u8]>);
+
                     if let Some(entry) = norepi_site::blocklist::find(&remote_addr.ip()) {
                         tracing::warn!("request was blocked: {:#?}", entry);
 
