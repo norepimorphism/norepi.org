@@ -2,6 +2,8 @@
 
 use std::{future::Future, process};
 
+pub mod blocklist;
+
 pub async fn run<E, O>(serve: impl Fn() -> O) -> process::ExitCode
 where
     E: std::error::Error,
@@ -46,6 +48,8 @@ fn try_setup_tracing() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
             // *hyper* is very noisy.
             .add_directive("hyper=error".parse()?)
+            // We don't need to hear from *mio* either.
+            .add_directive("mio=error".parse()?)
         })
         .with_thread_names(false)
         .try_init()

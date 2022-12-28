@@ -2,6 +2,8 @@
 
 #![feature(byte_slice_trim_ascii, let_else)]
 
+use std::fmt;
+
 use http::{header, HeaderValue};
 use hyper::{
     server::conn::AddrStream,
@@ -24,18 +26,44 @@ async fn main() -> std::process::ExitCode {
 
 async fn serve() -> Result<(), hyper::Error> {
     let addr = ([0; 4], 80).into();
-    tracing::info!("Binding to {}", addr);
+    tracing::info!("binding to {}...", addr);
 
     Server::bind(&addr)
         .serve(make_service_fn(|sock: &AddrStream| {
-            tracing::trace!("Incoming request from {}", sock.remote_addr());
+            let remote_addr = sock.remote_addr();
+            tracing::trace!("incoming request from {}", remote_addr);
 
-            async move { Ok::<_, http::Error>(service_fn(respond)) }
+            async move {
+                Ok::<_, http::Error>(service_fn(move |req| async move {
+                    if let Some(entry) = norepi_site::blocklist::find(remote_addr) {
+                        tracing::warn!("request was blocked: {:#?}", entry);
+
+                        // RFC 9110, Section 15.5.4:
+                        //   The 403 (Forbidden) status code indicates that the server understood
+                        //   the request but refuses to fulfill it. A server that wishes to make
+                        //   public why the request has been forbidden can describe the reason in
+                        //   the response content (if any).
+                        //
+                        // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.4>.
+                        Response::builder()
+                            .status(StatusCode::FORBIDDEN)
+                            .body({
+                                format!(
+                                    "You are blocked from accessing this webserver. Reason: {}",
+                                    entry.reason,
+                                )
+                                .into()
+                            })
+                    } else {
+                        respond(req)
+                    }
+                }))
+            }
         }))
         .with_graceful_shutdown(async {
             tokio::signal::ctrl_c()
                 .await
-                .expect("Failed to install shutdown signal handler")
+                .expect("failed to install shutdown signal handler")
         })
         .await
 }
@@ -55,7 +83,7 @@ macro_rules! res {
     }};
 }
 
-async fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
+fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
     tracing::debug!(
         "{} {}",
         req.method(),
@@ -65,8 +93,10 @@ async fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
     );
 
     let mut res = match check_request_is_well_formed(&req) {
-        Ok(_) => respond_to_well_formed_request(&req).await?,
+        Ok(_) => respond_to_well_formed_request(&req)?,
         Err(res) => {
+            tracing::error!("request was malformed");
+
             // The request was malformed, so a response containing error information was returned.
             res?
         }
@@ -121,9 +151,12 @@ fn check_request_is_well_formed(
     //
     // See <https://httpwg.org/specs/rfc9110.html#rfc.section.12.5.2>.
     if let Some(value) = headers.get(header::ACCEPT_CHARSET) {
+        tracing::warn!("Accept-Charset was received but is deprecated");
+
         // Despite the deprecation, in the interest of compatibility, we will accept
         // `Accept-Charset` headers that request UTF-8.
         if !accept_charset_requests_utf8(value) {
+            tracing::error!("Accept-Charset header does not request UTF-8");
             return not_acceptable();
         }
     }
@@ -146,6 +179,7 @@ fn check_request_is_well_formed(
         // Resource content will be returned as-is; hence, we will only accept `Accept-Encoding`
         // headers that request `identity`.
         if !accept_encoding_requests_identity(value) {
+            tracing::error!("Accept-Encoding header does not request identity");
             // RFC 9110, Section 12.5.3:
             //   Servers that fail a request due to an unsupported content coding ought to respond
             //   with a 415 (Unsupported Media Type) status and include an Accept-Encoding header
@@ -173,6 +207,7 @@ fn check_request_is_well_formed(
     // See <https://httpwg.org/specs/rfc9110.html#rfc.section.12.5.4>.
     if let Some(value) = headers.get(header::ACCEPT_LANGUAGE) {
         if !accept_language_requests_en(value) {
+            tracing::error!("Accept-Language header does not request en");
             return not_acceptable();
         }
     }
@@ -222,22 +257,25 @@ fn accept_encoding_requests_identity(value: &HeaderValue) -> bool {
         return false;
     };
 
+    // RFC 9110, Section 12.5.3:
+    //   If the representation has no content coding, then it is acceptable by default unless
+    //   specifically excluded by the Accept-Encoding header field stating either "identity;q=0" or
+    //   "*;q=0" without a more specific entry for "identity".
+
     for pref in prefs {
         // RFC 9110, Section 12.5.3:
         //   The asterisk "*" symbol in an Accept-Encoding field matches any available content
         //   coding not explicitly listed in the field.
-        if pref.is_acceptable_with_name(b"*") {
-            return true;
+        if pref.is_inacceptable_with_name(b"*") {
+            return false;
         }
 
-        // We will also check if the field contains the case-insensitive literal "identity", in
-        // which no content coding is explicitly requested.
-        if pref.is_acceptable_with_name(b"identity") {
-            return true;
+        if pref.is_inacceptable_with_name(b"identity") {
+            return false;
         }
     }
 
-    false
+    true
 }
 
 fn accept_language_requests_en(value: &HeaderValue) -> bool {
@@ -315,9 +353,26 @@ struct AcceptPreference<'a> {
     qvalue: Option<&'a [u8]>,
 }
 
+impl fmt::Display for AcceptPreference<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", std::str::from_utf8(self.name).unwrap_or("<err>"))?;
+        if let Some(qvalue) = self.qvalue {
+            write!(f, ";q={}", std::str::from_utf8(qvalue).unwrap_or("<err>"))?;
+        }
+
+        Ok(())
+    }
+}
+
 impl<'a> AcceptPreference<'a> {
     fn is_acceptable_with_name(&'a self, name: &[u8]) -> bool {
+        // We are careful to compare insensitively.
         self.name.eq_ignore_ascii_case(name) && self.is_acceptable()
+    }
+
+    fn is_inacceptable_with_name(&'a self, name: &[u8]) -> bool {
+        // Note that this is *not* the same as `!is_acceptable_with_name`.
+        self.name.eq_ignore_ascii_case(name) && self.is_inacceptable()
     }
 
     fn is_acceptable(&'a self) -> bool {
@@ -330,9 +385,13 @@ impl<'a> AcceptPreference<'a> {
         })
         .unwrap_or(true)
     }
+
+    fn is_inacceptable(&'a self) -> bool {
+        !self.is_acceptable()
+    }
 }
 
-async fn respond_to_well_formed_request(
+fn respond_to_well_formed_request(
     req: &Request<Body>,
 ) -> Result<Response<Body>, http::Error> {
     match req.method() {
@@ -341,7 +400,7 @@ async fn respond_to_well_formed_request(
         //   resource.
         //
         // See <https://httpwg.org/specs/rfc9110.html#rfc.section.9.3.1>.
-        &Method::GET => get(req).await,
+        &Method::GET => get(req),
         // RFC 9110, Section 9.3.2:
         //   The HEAD method is identical to GET except that the server MUST NOT send content in the
         //   response.
@@ -360,7 +419,7 @@ async fn respond_to_well_formed_request(
             // TODO: Our approach is to generate a GET response and discard the body and irrelevant
             // fields, though RFC 9110 indicates that this is not preferred. Is there a signficiant
             // performance cost to doing this?
-            get(req).await.map(|mut res| {
+            get(req).map(|mut res| {
                 // Discard the body.
                 *res.body_mut() = Body::empty();
 
@@ -391,7 +450,7 @@ async fn respond_to_well_formed_request(
     }
 }
 
-async fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
+fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
     match req.uri().path() {
         "/" => res!("index.html"),
         "/base.css" => res!("base.css"),
