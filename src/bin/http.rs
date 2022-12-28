@@ -6,7 +6,7 @@ use std::fmt;
 
 use http::{header, HeaderValue};
 use hyper::{
-    server::conn::AddrStream,
+    server::conn::{AddrIncoming, AddrStream},
     service::{make_service_fn, service_fn},
     Body,
     Method,
@@ -26,8 +26,14 @@ async fn main() -> std::process::ExitCode {
 
 async fn serve() -> Result<(), hyper::Error> {
     let local_addr = ([0; 4], 80).into();
+    let incoming = AddrIncoming::bind(&local_addr)?;
+    let server = rustls::ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_single_cert(tls_certs(), tls_key())
+        .expect("failed to build server configuration");
 
-    Server::bind(&local_addr)
+    Server::builder(incoming)
         .serve(make_service_fn(|sock: &AddrStream| {
             let remote_addr = sock.remote_addr();
             tracing::trace!("incoming request from {}", remote_addr);
@@ -65,6 +71,23 @@ async fn serve() -> Result<(), hyper::Error> {
                 .expect("failed to install shutdown signal handler")
         })
         .await
+}
+
+fn tls_certs() -> Vec<rustls::Certificate> {
+    rustls_pemfile::certs(&mut norepi_site::cert::FULLCHAIN)
+        .expect("failed to read full certificate chain")
+        .into_iter()
+        .map(rustls::Certificate)
+        .collect()
+}
+
+fn tls_key() -> rustls::PrivateKey {
+    rustls_pemfile::rsa_private_keys(&mut norepi_site::cert::RSA_KEY)
+        .expect("failed to read RSA private keys")
+        .into_iter()
+        .next()
+        .map(rustls::PrivateKey)
+        .expect("RSA private key is missing")
 }
 
 macro_rules! res {
