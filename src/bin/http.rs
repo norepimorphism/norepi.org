@@ -25,10 +25,9 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn serve() -> Result<(), hyper::Error> {
-    let addr = ([0; 4], 80).into();
-    tracing::info!("binding to {}...", addr);
+    let local_addr = ([0; 4], 80).into();
 
-    Server::bind(&addr)
+    Server::bind(&local_addr)
         .serve(make_service_fn(|sock: &AddrStream| {
             let remote_addr = sock.remote_addr();
             tracing::trace!("incoming request from {}", remote_addr);
