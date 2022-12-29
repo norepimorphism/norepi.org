@@ -554,15 +554,19 @@ fn respond_to_well_formed_request(
 
 fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
     match req.uri().path() {
-        "/" => res!("index.html"),
-        "/base.css" => res!("base.css"),
-        "/error.css" => res!("error.css"),
-        "/contact" => res!("contact.html"),
-        "/noctane" => res!("noctane.html"),
-        "/source" => res!("source.html"),
-        _ => res!("404.html" -> NOT_FOUND),
+        "/" => res!("index.html").build(),
+        "/base.css" => res!("base.css").build(),
+        "/error.css" => res!("error.css").build(),
+        "/contact" => res!("contact.html").build(),
+        "/noctane" => res!("noctane.html").build(),
+        "/source" => res!("source.html").build(),
+        "/robots.txt" => {
+            Response::builder()
+                .status(StatusCode::OK)
+                .body(include_str!("robots.txt").into())
+        }
+        _ => res!("404.html" -> NOT_FOUND).build(),
     }
-    .build()
 }
 
 struct Resource {

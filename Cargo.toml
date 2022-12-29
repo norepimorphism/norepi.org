@@ -16,7 +16,7 @@ path = "src/bin/echo.rs"
 
 [[bin]]
 name = "norepi-http"
-path = "src/bin/http.rs"
+path = "src/bin/http/main.rs"
 
 [[bin]]
 name = "norepi-smtp"

@@ -1,0 +1,3 @@
+User-agent: *
+# This is a honeypot for bad robots. Do not access this resource if you are human.
+Disallow: /you-may-be-banned-if-you-access-this-resource
