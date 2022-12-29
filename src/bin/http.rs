@@ -2,12 +2,12 @@
 
 #![feature(byte_slice_trim_ascii, ip)]
 
-use std::{fmt, fs, io::{self, Write as _}};
+use std::{fmt, fs, io::Write as _, net::Ipv4Addr, sync::{Arc, Mutex}};
 
 use http::{header, HeaderValue};
 use hyper::{
     server::conn::{AddrIncoming, AddrStream},
-    service::{make_service_fn, service_fn},
+    service::{make_service_fn, service_fn, Service},
     Body,
     Method,
     Request,
@@ -33,7 +33,7 @@ async fn run() -> Result<(), hyper::Error> {
         .expect("failed to open report file");
     if let Ok(meta) = report.metadata() {
         if meta.len() == 0 {
-            writeln!(report, "IP Address,TCP Port,HTTP Method,Resource URI,User Agent");
+            writeln!(report, "Date,IP Address,TCP Port,HTTP Method,Resource URI,User Agent");
         }
     }
 
@@ -44,8 +44,10 @@ async fn run() -> Result<(), hyper::Error> {
     Ok(())
 }
 
-async fn serve<T: io::Write>(report: &mut csv::Writer<T>) -> Result<(), hyper::Error> {
-    let local_addr = ([0; 4], 80).into();
+async fn serve(report: &mut csv::Writer<fs::File>) -> Result<(), hyper::Error> {
+    let report = Arc::new(Mutex::new(report));
+
+    let local_addr = (Ipv4Addr::LOCALHOST, 80).into();
     let incoming = AddrIncoming::bind(&local_addr)?;
     // let server = rustls::ServerConfig::builder()
     //     .with_safe_defaults()
@@ -54,51 +56,8 @@ async fn serve<T: io::Write>(report: &mut csv::Writer<T>) -> Result<(), hyper::E
     //     .expect("failed to build server configuration");
 
     Server::builder(incoming)
-        .serve(make_service_fn(|sock: &AddrStream| {
-            let remote_addr = sock.remote_addr();
-            tracing::trace!("incoming request from {}", remote_addr);
-
-            async move {
-                Ok::<_, http::Error>(service_fn(move |req| async move {
-                    // | IP Address | TCP Port | HTTP Method | Resouce URI | User Agent |
-                    // |------------|----------|-------------|-------------|------------|
-                    let _ = report.write_field(remote_addr.ip().to_canonical().to_string());
-                    let _ = report.write_field(remote_addr.port().to_string());
-                    let _ = report.write_field(req.method().as_str());
-                    let _ = report.write_field(req.uri().to_string());
-                    let _ = report.write_field({
-                        req
-                            .headers()
-                            .get(header::USER_AGENT)
-                            .map(|it| it.as_bytes())
-                            .unwrap_or(b"")
-                    });
-                    let _ = report.write_record(None::<&[u8]>);
-
-                    if let Some(entry) = norepi_site::blocklist::find(&remote_addr.ip()) {
-                        tracing::warn!("request was blocked: {:#?}", entry);
-
-                        // RFC 9110, Section 15.5.4:
-                        //   The 403 (Forbidden) status code indicates that the server understood
-                        //   the request but refuses to fulfill it. A server that wishes to make
-                        //   public why the request has been forbidden can describe the reason in
-                        //   the response content (if any).
-                        //
-                        // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.4>.
-                        Response::builder()
-                            .status(StatusCode::FORBIDDEN)
-                            .body({
-                                format!(
-                                    "You are blocked from accessing this webserver. Reason: {}",
-                                    entry.reason,
-                                )
-                                .into()
-                            })
-                    } else {
-                        respond(req)
-                    }
-                }))
-            }
+        .serve(make_service_fn(move |sock: &AddrStream| async move {
+            Ok::<_, http::Error>(handle_remote(report, sock))
         }))
         .with_graceful_shutdown(async {
             tokio::signal::ctrl_c()
@@ -123,6 +82,69 @@ fn tls_key() -> rustls::PrivateKey {
         .next()
         .map(rustls::PrivateKey)
         .expect("RSA private key is missing")
+}
+
+fn handle_remote<'a, B>(report: Arc<Mutex<&'a mut csv::Writer<fs::File>>>, sock: &'a AddrStream) -> impl 'a + Service<Request<Body>> {
+    service_fn(move |req| {
+        let report = Arc::clone(&report);
+
+        handle_request(report, sock, req)
+    })
+}
+
+async fn handle_request(
+    report: Arc<Mutex<&mut csv::Writer<fs::File>>>,
+    sock: &AddrStream,
+    req: Request<Body>,
+) -> Result<Response<Body>, http::Error> {
+    let remote_addr = sock.remote_addr();
+    tracing::trace!("incoming request from {}", remote_addr);
+
+    // Acquire the mutex lock.
+    let mut report = report.lock().expect("mutex is poisoned");
+
+    // | Date | IP Address | TCP Port | HTTP Method | Resouce URI | User Agent |
+    // |------|------------|----------|-------------|-------------|------------|
+    let _ = report.write_field(chrono::Utc::now().to_string());
+    let _ = report.write_field(remote_addr.ip().to_canonical().to_string());
+    let _ = report.write_field(remote_addr.port().to_string());
+    let _ = report.write_field(req.method().as_str());
+    let _ = report.write_field(req.uri().to_string());
+    let _ = report.write_field({
+        req
+            .headers()
+            .get(header::USER_AGENT)
+            .map(|it| it.as_bytes())
+            .unwrap_or(b"")
+    });
+    // Terminate this record.
+    let _ = report.write_record(None::<&[u8]>);
+
+    // Release the mutex lock.
+    drop(report);
+
+    if let Some(entry) = norepi_site::blocklist::find(&remote_addr.ip()) {
+        tracing::warn!("request was blocked: {:#?}", entry);
+
+        // RFC 9110, Section 15.5.4:
+        //   The 403 (Forbidden) status code indicates that the server understood
+        //   the request but refuses to fulfill it. A server that wishes to make
+        //   public why the request has been forbidden can describe the reason in
+        //   the response content (if any).
+        //
+        // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.4>.
+        Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body({
+                format!(
+                    "You are blocked from accessing this webserver. Reason: {}",
+                    entry.reason,
+                )
+                .into()
+            })
+    } else {
+        respond(req)
+    }
 }
 
 macro_rules! res {
