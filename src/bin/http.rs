@@ -2,7 +2,7 @@
 
 #![feature(byte_slice_trim_ascii, ip)]
 
-use std::{fmt, fs, io::Write as _, net::Ipv4Addr, sync::{Arc, Mutex}};
+use std::{fmt, fs, future::Future, io::Write as _, net::{Ipv4Addr, SocketAddr}, sync::{Arc, Mutex}};
 
 use http::{header, HeaderValue};
 use hyper::{
@@ -33,20 +33,26 @@ async fn run() -> Result<(), hyper::Error> {
         .expect("failed to open report file");
     if let Ok(meta) = report.metadata() {
         if meta.len() == 0 {
-            writeln!(report, "Date,IP Address,TCP Port,HTTP Method,Resource URI,User Agent");
+            writeln!(report, "Date,IP Address,TCP Port,HTTP Method,Resource URI,User Agent")
+                .expect("failed to write CSV header");
         }
     }
 
-    let mut report = csv::Writer::from_writer(report);
-    serve(&mut report).await?;
-    report.flush().expect("failed to flush CSV writer");
+    let report = csv::Writer::from_writer(report);
+    let report = Arc::new(Mutex::new(report));
+    serve(Arc::clone(&report)).await?;
+
+    Arc::try_unwrap(report)
+        .expect("Arc has other references")
+        .into_inner()
+        .expect("mutex is poisoned")
+        .flush()
+        .expect("failed to flush CSV writer");
 
     Ok(())
 }
 
-async fn serve(report: &mut csv::Writer<fs::File>) -> Result<(), hyper::Error> {
-    let report = Arc::new(Mutex::new(report));
-
+async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::Error> {
     let local_addr = (Ipv4Addr::LOCALHOST, 80).into();
     let incoming = AddrIncoming::bind(&local_addr)?;
     // let server = rustls::ServerConfig::builder()
@@ -56,8 +62,14 @@ async fn serve(report: &mut csv::Writer<fs::File>) -> Result<(), hyper::Error> {
     //     .expect("failed to build server configuration");
 
     Server::builder(incoming)
-        .serve(make_service_fn(move |sock: &AddrStream| async move {
-            Ok::<_, http::Error>(handle_remote(report, sock))
+        .serve(make_service_fn(move |sock| {
+            // This closure is invoked for each remote connection, so we need to clone `report` to
+            // use it.
+            let report = Arc::clone(&report);
+
+            let result = Ok::<_, http::Error>(handle_remote(report, sock));
+
+            async move { result }
         }))
         .with_graceful_shutdown(async {
             tokio::signal::ctrl_c()
@@ -67,6 +79,7 @@ async fn serve(report: &mut csv::Writer<fs::File>) -> Result<(), hyper::Error> {
         .await
 }
 
+#[allow(dead_code)]
 fn tls_certs() -> Vec<rustls::Certificate> {
     rustls_pemfile::certs(&mut norepi_site::cert::FULLCHAIN)
         .expect("failed to read full certificate chain")
@@ -75,6 +88,7 @@ fn tls_certs() -> Vec<rustls::Certificate> {
         .collect()
 }
 
+#[allow(dead_code)]
 fn tls_key() -> rustls::PrivateKey {
     rustls_pemfile::rsa_private_keys(&mut norepi_site::cert::RSA_KEY)
         .expect("failed to read RSA private keys")
@@ -84,20 +98,27 @@ fn tls_key() -> rustls::PrivateKey {
         .expect("RSA private key is missing")
 }
 
-fn handle_remote<'a, B>(report: Arc<Mutex<&'a mut csv::Writer<fs::File>>>, sock: &'a AddrStream) -> impl 'a + Service<Request<Body>> {
+fn handle_remote<'report, 'sock>(
+    report: Arc<Mutex<csv::Writer<fs::File>>>,
+    sock: &AddrStream,
+) -> impl Service<Request<Body>, Response = Response<Body>, Error = http::Error, Future = impl Future<Output = Result<Response<Body>, http::Error>> + Sync> {
+    let remote_addr = sock.remote_addr();
+
     service_fn(move |req| {
+        // This closure is invoked for each request, so we need to clone `report` to use it.
         let report = Arc::clone(&report);
 
-        handle_request(report, sock, req)
+        let result = handle_request(report, remote_addr, req);
+
+        async move { result }
     })
 }
 
-async fn handle_request(
-    report: Arc<Mutex<&mut csv::Writer<fs::File>>>,
-    sock: &AddrStream,
+fn handle_request(
+    report: Arc<Mutex<csv::Writer<fs::File>>>,
+    remote_addr: SocketAddr,
     req: Request<Body>,
 ) -> Result<Response<Body>, http::Error> {
-    let remote_addr = sock.remote_addr();
     tracing::trace!("incoming request from {}", remote_addr);
 
     // Acquire the mutex lock.
