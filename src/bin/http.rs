@@ -2,7 +2,7 @@
 
 #![feature(byte_slice_trim_ascii, ip)]
 
-use std::{fmt, fs, future::Future, io::Write as _, net::{Ipv4Addr, SocketAddr}, sync::{Arc, Mutex}};
+use std::{env, fmt, fs, future::Future, io::Write as _, net::{Ipv4Addr, SocketAddr}, sync::{Arc, Mutex}};
 
 use http::{header, HeaderValue};
 use hyper::{
@@ -29,7 +29,9 @@ async fn run() -> Result<(), hyper::Error> {
         .write(true)
         .append(true)
         .create(true)
-        .open("~/http.csv")
+        // TODO: Replace `home_dir`. It's not a big deal right now, though, because our server OS is
+        // Linux.
+        .open(env::home_dir().unwrap_or_default().join("http.csv"))
         .expect("failed to open report file");
     if let Ok(meta) = report.metadata() {
         if meta.len() == 0 {
