@@ -55,7 +55,7 @@ async fn run() -> Result<(), hyper::Error> {
 }
 
 async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::Error> {
-    let local_addr = (Ipv4Addr::LOCALHOST, 80).into();
+    let local_addr = (Ipv4Addr::UNSPECIFIED, 80).into();
     let incoming = AddrIncoming::bind(&local_addr)?;
     // let server = rustls::ServerConfig::builder()
     //     .with_safe_defaults()
