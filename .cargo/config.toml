@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MPL-2.0
+
+[build]
+incremental = false
+
+[profile.release]
+opt-level = 3
+debug = true
+lto = "thin"
+rustflags = [
+    "-C", "target-cpu=native",
+    "-Z", "tune-cpu=native"
+]

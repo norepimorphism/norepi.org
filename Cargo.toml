@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
+cargo-features = ["profile-rustflags"]
+
 [package]
 name = "norepi-site"
 version = "0.1.0"
