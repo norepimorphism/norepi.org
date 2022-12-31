@@ -26,7 +26,6 @@ path = "src/bin/smtp.rs"
 chrono = "0.4"
 csv = "1.1"
 dirs = "4.0"
-http = "0.2"
 hyper = { version = "0.14", features = ["http1", "http2", "server", "tcp", "runtime"] }
 lazy_static = "1.4"
 rustls = "0.20"

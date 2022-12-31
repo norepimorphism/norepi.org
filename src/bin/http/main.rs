@@ -4,8 +4,9 @@
 
 use std::{env, fmt, fs, future::Future, io::Write as _, net::{Ipv4Addr, SocketAddr}, sync::{Arc, Mutex}};
 
-use http::{header, HeaderValue};
 use hyper::{
+    header::HeaderValue,
+    http,
     server::conn::{AddrIncoming, AddrStream},
     service::{make_service_fn, service_fn, Service},
     Body,
@@ -15,6 +16,10 @@ use hyper::{
     Server,
     StatusCode,
 };
+
+use resource::Builder as ResourceBuilder;
+
+mod resource;
 
 static SERVER: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 static ALLOW: &str = "GET, HEAD, OPTIONS";
@@ -168,21 +173,6 @@ fn handle_request(
     }
 }
 
-macro_rules! res {
-    ($filename:literal $(-> $status:ident)? $(,)?) => {{
-        #[allow(unused_variables)]
-        let status = StatusCode::OK;
-        $(
-            let status = StatusCode::$status;
-        )?
-
-        Resource {
-            status,
-            content: include_str!(concat!(env!("OUT_DIR"), "/gen/", $filename)),
-        }
-    }};
-}
-
 fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
     tracing::debug!(
         "{} {}",
@@ -241,7 +231,7 @@ fn check_request_is_well_formed(
     //
     // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.7>.
     let not_acceptable = || {
-        Err(res!("406.html" -> NOT_ACCEPTABLE).build())
+        Err(resource::include!("406"."html").status(StatusCode::NOT_ACCEPTABLE).build())
     };
 
     // RFC 9110, Section 12.5.2:
@@ -286,7 +276,8 @@ fn check_request_is_well_formed(
             //   field in that response, allowing clients to distinguish between issues related to
             //   content codings and media types.
             return Err({
-                res!("415.html" -> UNSUPPORTED_MEDIA_TYPE)
+                resource::include!("415"."html")
+                    .status(StatusCode::UNSUPPORTED_MEDIA_TYPE)
                     .build()
                     .map(|mut res| {
                         res.headers_mut().insert(
@@ -539,43 +530,27 @@ fn respond_to_well_formed_request(
         | &Method::CONNECT
         | &Method::TRACE
         | &Method::PATCH => {
-            res!("405.html" -> METHOD_NOT_ALLOWED).build()
+            resource::include!("405"."html").status(StatusCode::METHOD_NOT_ALLOWED).build()
         }
         // RFC 9110, Section 15.6.2:
         //   [501 (Not Implemented)] is the appropriate response when the server does not recognize
         //   the request method and is not capable of supporting it for any resource.
         //
         // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.6.2>.
-        _ => res!("501.html" -> NOT_IMPLEMENTED).build(),
+        _ => resource::include!("501"."html").status(StatusCode::NOT_IMPLEMENTED).build(),
     }
 }
 
 fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
     match req.uri().path() {
-        "/" => res!("index.html").build(),
-        "/base.css" => res!("base.css").build(),
-        "/error.css" => res!("error.css").build(),
-        "/contact" => res!("contact.html").build(),
-        "/noctane" => res!("noctane.html").build(),
-        "/source" => res!("source.html").build(),
-        "/robots.txt" => {
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(include_str!("robots.txt").into())
-        }
-        _ => res!("404.html" -> NOT_FOUND).build(),
+        "/" => resource::include!("index"."html"),
+        "/base.css" => resource::include!("base"."css"),
+        "/error.css" => resource::include!("error"."css"),
+        "/contact" => resource::include!("contact"."html"),
+        "/noctane" => resource::include!("noctane"."html"),
+        "/source" => resource::include!("source"."html"),
+        "/robots.txt" => resource::include!("robots"."txt"),
+        _ => resource::include!("404"."html").status(StatusCode::NOT_FOUND),
     }
-}
-
-struct Resource {
-    status: StatusCode,
-    content: &'static str,
-}
-
-impl Resource {
-    fn build(self) -> Result<Response<Body>, http::Error> {
-        Response::builder()
-            .status(self.status)
-            .body(self.content.into())
-    }
+    .build()
 }

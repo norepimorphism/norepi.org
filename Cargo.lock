@@ -626,7 +626,6 @@ dependencies = [
  "csv",
  "dirs",
  "generate-norepi-site",
- "http",
  "hyper",
  "lazy_static",
  "rustls",
