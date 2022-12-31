@@ -90,6 +90,6 @@ macro_rules! ipv6_blocklist {
     };
 }
 
-ipv4_blocklist! {}
+include!("blocklist/ipv4.rs");
 
-ipv6_blocklist! {}
+include!("blocklist/ipv6.rs");
