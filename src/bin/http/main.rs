@@ -17,7 +17,7 @@ use hyper::{
     StatusCode,
 };
 
-use resource::Builder as ResourceBuilder;
+use resource::{Builder as ResourceBuilder, Resource};
 
 mod resource;
 
@@ -195,14 +195,6 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
     // Append default response headers.
 
     let headers = res.headers_mut();
-    // RFC 9110, Section 8.5:
-    //   The "Content-Language" header field describes the natural language(s) of the intended
-    //   audience for the representation.
-    //   ...
-    //   Content-Language MAY be applied to any media type---it is not limited to textual documents.
-    //
-    // See <https://httpwg.org/specs/rfc9110.html#rfc.section.8.5>.
-    headers.insert(header::CONTENT_LANGUAGE, HeaderValue::from_static("en"));
     // RFC 9110, Section 10.2.4:
     //   The "Server" header field contains information about the software used by the origin server
     //   to handle the request.... An origin server MAY generate a Server header field in its
@@ -231,7 +223,7 @@ fn check_request_is_well_formed(
     //
     // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.7>.
     let not_acceptable = || {
-        Err(resource::include!("406"."html").status(StatusCode::NOT_ACCEPTABLE).build())
+        Err(resource::include!("406"."html").status(StatusCode::NOT_ACCEPTABLE).build().response())
     };
 
     // RFC 9110, Section 12.5.2:
@@ -279,6 +271,7 @@ fn check_request_is_well_formed(
                 resource::include!("415"."html")
                     .status(StatusCode::UNSUPPORTED_MEDIA_TYPE)
                     .build()
+                    .response()
                     .map(|mut res| {
                         res.headers_mut().insert(
                             header::ACCEPT_ENCODING,
@@ -491,7 +484,7 @@ fn respond_to_well_formed_request(
         //   resource.
         //
         // See <https://httpwg.org/specs/rfc9110.html#rfc.section.9.3.1>.
-        &Method::GET => get(req),
+        &Method::GET => get(req).response(),
         // RFC 9110, Section 9.3.2:
         //   The HEAD method is identical to GET except that the server MUST NOT send content in the
         //   response.
@@ -530,18 +523,26 @@ fn respond_to_well_formed_request(
         | &Method::CONNECT
         | &Method::TRACE
         | &Method::PATCH => {
-            resource::include!("405"."html").status(StatusCode::METHOD_NOT_ALLOWED).build()
+            resource::include!("405"."html")
+                .status(StatusCode::METHOD_NOT_ALLOWED)
+                .build()
+                .response()
         }
         // RFC 9110, Section 15.6.2:
         //   [501 (Not Implemented)] is the appropriate response when the server does not recognize
         //   the request method and is not capable of supporting it for any resource.
         //
         // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.6.2>.
-        _ => resource::include!("501"."html").status(StatusCode::NOT_IMPLEMENTED).build(),
+        _ => {
+            resource::include!("501"."html")
+                .status(StatusCode::NOT_IMPLEMENTED)
+                .build()
+                .response()
+        }
     }
 }
 
-fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
+fn get(req: &Request<Body>) -> Resource {
     match req.uri().path() {
         "/" => resource::include!("index"."html"),
         "/base.css" => resource::include!("base"."css"),

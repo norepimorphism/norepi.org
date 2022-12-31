@@ -40,21 +40,23 @@ impl Builder {
     pub fn new(content_type: &'static str) -> Self {
         Self {
             content_type,
-            status_code: None,
+            language: None,
             content: None,
+            status_code: None,
         }
     }
 }
 
 pub struct Builder {
     content_type: &'static str,
-    status_code: Option<StatusCode>,
+    language: Option<&'static str>,
     content: Option<&'static str>,
+    status_code: Option<StatusCode>,
 }
 
 impl Builder {
-    pub fn status(&mut self, code: StatusCode) -> &mut Self {
-        self.status_code = Some(code);
+    pub fn language(&mut self, code: &'static str) -> &mut Self {
+        self.language = Some(code);
 
         self
     }
@@ -65,10 +67,43 @@ impl Builder {
         self
     }
 
-    pub fn build(self) -> Result<Response<Body>, http::Error> {
+    pub fn status(&mut self, code: StatusCode) -> &mut Self {
+        self.status_code = Some(code);
+
+        self
+    }
+
+    pub fn build(self) -> Resource {
+        Resource {
+            content_type: self.content_type,
+            language: self.language.unwrap_or("en"),
+            content: self.content.unwrap_or_default(),
+            status_code: self.status_code.unwrap_or(StatusCode::OK),
+        }
+    }
+}
+
+pub struct Resource {
+    pub content_type: &'static str,
+    pub language: &'static str,
+    pub content: &'static str,
+    pub status_code: StatusCode,
+}
+
+impl Resource {
+    pub fn response(self) -> Result<Response<Body>, http::Error> {
         Response::builder()
-            .status(self.status.unwrap_or(StatusCode::OK))
+            .status(self.status)
             .header(header::CONTENT_TYPE, self.content_type)
-            .body(self.content.map(Body::from).unwrap_or_else(Body::empty))
+            // RFC 9110, Section 8.5:
+            //   The "Content-Language" header field describes the natural language(s) of the
+            //   intended audience for the representation.
+            //   ...
+            //   Content-Language MAY be applied to any media type---it is not limited to textual
+            //   documents.
+            //
+            // See <https://httpwg.org/specs/rfc9110.html#rfc.section.8.5>.
+            .header(header::CONTENT_LANGUAGE, self.language)
+            .body(self.content.into())
     }
 }
