@@ -2,6 +2,7 @@
 
 use std::{future::Future, process};
 
+pub mod bind;
 pub mod cert;
 pub mod db;
 

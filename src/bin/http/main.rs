@@ -2,7 +2,7 @@
 
 #![feature(byte_slice_trim_ascii, ip)]
 
-use std::{env, fs, future::Future, io::Write as _, net::{Ipv4Addr, SocketAddr}, sync::{Arc, Mutex}};
+use std::{env, fs, future::Future, io::Write as _, net::SocketAddr, sync::{Arc, Mutex}};
 
 use hyper::{
     header::{self, HeaderValue},
@@ -58,7 +58,7 @@ async fn run() -> Result<(), hyper::Error> {
 }
 
 async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::Error> {
-    let local_addr = (Ipv4Addr::UNSPECIFIED, 80).into();
+    let local_addr = (norepi_site::bind::PUBLIC_ADDR, 80).into();
     let incoming = AddrIncoming::bind(&local_addr)?;
     // let server = rustls::ServerConfig::builder()
     //     .with_safe_defaults()
