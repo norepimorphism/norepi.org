@@ -2,8 +2,8 @@
 
 use std::{future::Future, process};
 
-pub mod blocklist;
 pub mod cert;
+pub mod db;
 
 pub async fn run<E, O>(serve: impl Fn() -> O) -> process::ExitCode
 where
