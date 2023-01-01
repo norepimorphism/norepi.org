@@ -715,19 +715,36 @@ dependencies = [
 name = "norepi-site"
 version = "0.1.0"
 dependencies = [
- "bincode",
- "bitflags",
  "chrono",
  "csv",
  "dirs",
  "generate-norepi-site",
  "hyper",
+ "norepi-site-util",
  "rustls",
  "rustls-pemfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "norepi-site-db"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "bitflags",
+ "chrono",
+ "dirs",
  "serde",
  "serde-big-array",
  "sled",
- "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "norepi-site-util"
+version = "0.1.0"
+dependencies = [
  "tracing",
  "tracing-subscriber",
 ]

@@ -26,7 +26,7 @@ static ALLOW: &str = "GET, HEAD, OPTIONS";
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    norepi_site::run(run).await
+    norepi_site_util::run(run).await
 }
 
 async fn run() -> Result<(), hyper::Error> {

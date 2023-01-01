@@ -2,10 +2,6 @@
 
 use std::{future::Future, process};
 
-pub mod bind;
-pub mod cert;
-pub mod db;
-
 pub async fn run<E, O>(serve: impl Fn() -> O) -> process::ExitCode
 where
     E: std::error::Error,
