@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use hyper::{header, http, Body, Response, StatusCode};
+use std::fmt;
+
+use hyper::{header::{self, HeaderValue}, http, Body, Request, Response, StatusCode};
 
 pub mod mime;
 
@@ -8,14 +10,14 @@ pub mod mime;
 ///
 /// The MIME type is automatically derived from the file extension.
 macro_rules! for_file_ext {
-    ($ext:literal $(,)?) => {
-        $crate::resource::Builder::new($crate::resource::mime::from_file_ext($file_ext))
+    ($ext:tt) => {
+        $crate::resource::Builder::new($crate::resource::mime::from_file_ext!($ext))
     };
 }
 
 /// The content of the file at the given path within the `${OUT_DIR}/gen/` directory.
 macro_rules! include_gen_content {
-    ($filename:expr $(,)?) => {
+    ($filename:expr) => {
         include_str!(concat!(env!("OUT_DIR"), "/gen/", $filename))
     };
 }
@@ -24,9 +26,9 @@ macro_rules! include_gen_content {
 ///
 /// The MIME type is automatically derived from the file extension.
 //
-// Note: this shadows the builtin `include` macro.
-macro_rules! include {
-    ($file_base:literal . $file_ext:literal $(,)?) => {
+// TODO: find a better name
+macro_rules! include_ {
+    ($file_base:tt . $file_ext:tt $(,)?) => {
         $crate::resource::for_file_ext!($file_ext)
             .content(include_str!(concat!($file_base, ".", $file_ext)))
     };
@@ -37,16 +39,16 @@ macro_rules! include {
 ///
 /// The MIME type is automatically derived from the file extension.
 macro_rules! include_gen {
-    ($file_base:literal . $file_ext:literal $(,)?) => {
+    ($file_base:tt . $file_ext:tt $(,)?) => {
         $crate::resource::for_file_ext!($file_ext)
             .content($crate::resource::include_gen_content!(concat!($file_base, ".", $file_ext)))
     };
 }
 
-pub use for_file_ext;
-pub use include;
-pub use include_gen;
-pub use include_gen_content;
+pub(crate) use for_file_ext;
+pub(crate) use include_;
+pub(crate) use include_gen;
+pub(crate) use include_gen_content;
 
 impl Builder {
     /// Constructs a new builder for a binary resource.
@@ -80,6 +82,7 @@ impl Builder {
             mime_type,
             language: None,
             charset: None,
+            encoding: None,
             content: None,
             status_code: None,
         }
@@ -91,6 +94,7 @@ pub struct Builder {
     mime_type: &'static str,
     language: Option<&'static str>,
     charset: Option<&'static str>,
+    encoding: Option<&'static str>,
     content: Option<&'static str>,
     status_code: Option<StatusCode>,
 }
@@ -104,7 +108,7 @@ impl Builder {
     ///
     /// [RFC 5646]: https://datatracker.ietf.org/doc/html/rfc5646
     pub fn language(&mut self, tag: &'static str) -> &mut Self {
-        self.language = Some(code);
+        self.language = Some(tag);
 
         self
     }
@@ -187,7 +191,7 @@ impl Resource {
     /// Generates an HTTP response for this resource.
     pub fn response(self) -> Result<Response<Body>, http::Error> {
         let response = Response::builder()
-            .status(self.status)
+            .status(self.status_code)
             // RFC 9110, Section 8.3:
             //   The "Content-Type" header field indicates the media type of the associated
             //   representation...
@@ -224,7 +228,7 @@ impl Resource {
             //   be included.
             //
             // See <https://httpwg.org/specs/rfc9110.html#rfc.section.8.4>.
-            response = response.header(header::CONTENT_ENCODING, self.encoding);
+            response = response.header(header::CONTENT_ENCODING, encoding);
         }
 
         response.body(self.content.into())
@@ -287,14 +291,9 @@ impl Resource {
         // See <https://httpwg.org/specs/rfc9110.html#rfc.section.12.5.3>.
         if let Some(value) = headers.get(header::ACCEPT_ENCODING) {
             if !self.matches_accept_encoding(value) {
-                tracing::error!(
-                    "Accept-Encoding header does not request '{}'",
-                    if let Some(encoding) = self.encoding {
-                        encoding
-                    } else {
-                        "identity"
-                    },
-                );
+                let encoding = self.encoding.unwrap_or("identity");
+
+                tracing::error!("Accept-Encoding header does not request '{}'", encoding);
                 // RFC 9110, Section 12.5.3:
                 //   Servers that fail a request due to an unsupported content coding ought to
                 //   respond with a 415 (Unsupported Media Type) status and include an
@@ -308,7 +307,7 @@ impl Resource {
                         .map(|mut response| {
                             response.headers_mut().insert(
                                 header::ACCEPT_ENCODING,
-                                HeaderValue::from_static(self.encoding),
+                                HeaderValue::from_static(encoding),
                             );
 
                             response

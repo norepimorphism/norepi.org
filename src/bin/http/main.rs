@@ -2,10 +2,10 @@
 
 #![feature(byte_slice_trim_ascii, ip)]
 
-use std::{env, fmt, fs, future::Future, io::Write as _, net::{Ipv4Addr, SocketAddr}, sync::{Arc, Mutex}};
+use std::{env, fs, future::Future, io::Write as _, net::{Ipv4Addr, SocketAddr}, sync::{Arc, Mutex}};
 
 use hyper::{
-    header::HeaderValue,
+    header::{self, HeaderValue},
     http,
     server::conn::{AddrIncoming, AddrStream},
     service::{make_service_fn, service_fn, Service},
@@ -16,8 +16,6 @@ use hyper::{
     Server,
     StatusCode,
 };
-
-use resource::{Builder as ResourceBuilder, Resource};
 
 mod resource;
 
@@ -105,7 +103,7 @@ fn tls_key() -> rustls::PrivateKey {
         .expect("RSA private key is missing")
 }
 
-fn create_service(
+fn create_service<S, F>(
     report: Arc<Mutex<csv::Writer<fs::File>>>,
     sock: &AddrStream,
 ) -> S
@@ -193,7 +191,7 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
         //   resource.
         //
         // See <https://httpwg.org/specs/rfc9110.html#rfc.section.9.3.1>.
-        &Method::GET => get(&req).response(),
+        &Method::GET => get(&req),
         // RFC 9110, Section 9.3.2:
         //   The HEAD method is identical to GET except that the server MUST NOT send content in the
         //   response.
@@ -212,7 +210,7 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
             // TODO: Our approach is to generate a GET response and discard the body and irrelevant
             // fields, though RFC 9110 indicates that this is not preferred. Is there a signficiant
             // performance cost to doing this?
-            get(&req).response().map(|mut response| {
+            get(&req).map(|mut response| {
                 // Discard the body.
                 *response.body_mut() = Body::empty();
                 // TODO: Maybe discard *Content-Length* as well?
@@ -239,7 +237,7 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
             //   communication options typically depend on the resource, the "*" request is only
             //   useful as a "ping" or "no-op" type of method; it does nothing beyond allowing the
             //   client to test the capabilities of the server.
-            if req_target == b"*" {
+            if req_target.path().as_bytes() == b"*" {
                 response.body(Body::empty())
             } else {
                 response
@@ -299,7 +297,7 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
 
 fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
     let resource = match req.uri().path() {
-        "/robots.txt" => resource::include!("robots"."txt"),
+        "/robots.txt" => resource::include_!("robots"."txt"),
         "/base.css" => resource::include_gen!("base"."css"),
         "/error.css" => resource::include_gen!("error"."css"),
         "/" => resource::include_gen!("index"."html"),
