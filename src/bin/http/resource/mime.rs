@@ -17,11 +17,11 @@ macro_rules! from_file_ext {
     ("txt") => { local_item!(PLAINTEXT) };
 }
 
-/// The `"application/octet-stream"` MIME type.
+/// The `application/octet-stream` MIME type.
 pub static BINARY: &str = "application/octet-stream";
-/// The `"text/css"` MIME type.
+/// The `text/css` MIME type.
 pub static CSS: &str = "text/css";
-/// The `"text/html"` MIME type.
+/// The `text/html` MIME type.
 pub static HTML: &str = "text/html";
-/// The `"text/plain"` MIME type.
+/// The `text/plain` MIME type.
 pub static PLAINTEXT: &str = "text/plain";
