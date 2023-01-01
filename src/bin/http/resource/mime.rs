@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 
-pub use from_file_ext;
-
 /// Expands an `ident` of a local item to its full path.
 macro_rules! local_item {
     ($ident:ident) => {
@@ -16,6 +14,7 @@ macro_rules! from_file_ext {
     ("html") => { local_item!(HTML) };
     ("txt") => { local_item!(PLAINTEXT) };
 }
+pub use from_file_ext;
 
 /// The `application/octet-stream` MIME type.
 pub static BINARY: &str = "application/octet-stream";

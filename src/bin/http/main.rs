@@ -165,15 +165,17 @@ fn handle_request(
         //   the response content (if any).
         //
         // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.4>.
-        Response::builder()
+        resource::Builder::plaintext()
             .status(StatusCode::FORBIDDEN)
-            .body({
+            .content({
                 format!(
                     "You are blocked from accessing norepi.org and its subdomains:\n  {}",
                     entry.reason,
                 )
                 .into()
             })
+            .build()
+            .response()
     } else {
         respond(req)
     }
@@ -260,7 +262,7 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
         | &Method::CONNECT
         | &Method::TRACE
         | &Method::PATCH => {
-            resource::include!("405"."html")
+            resource::include_gen!("405"."html")
                 .status(StatusCode::METHOD_NOT_ALLOWED)
                 .header("Allow", ALLOW)
                 .build()
@@ -274,7 +276,7 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
         //
         // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.6.2>.
         _ => {
-            resource::include!("501"."html")
+            resource::include_gen!("501"."html")
                 .status(StatusCode::NOT_IMPLEMENTED)
                 .build()
                 .response()
@@ -298,13 +300,13 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
 fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
     let resource = match req.uri().path() {
         "/robots.txt" => resource::include!("robots"."txt"),
-        "/base.css" => resource::include!("base"."css"),
-        "/error.css" => resource::include!("error"."css"),
-        "/" => resource::include!("index"."html"),
-        "/contact" => resource::include!("contact"."html"),
-        "/noctane" => resource::include!("noctane"."html"),
-        "/source" => resource::include!("source"."html"),
-        _ => resource::include!("404"."html").status(StatusCode::NOT_FOUND),
+        "/base.css" => resource::include_gen!("base"."css"),
+        "/error.css" => resource::include_gen!("error"."css"),
+        "/" => resource::include_gen!("index"."html"),
+        "/contact" => resource::include_gen!("contact"."html"),
+        "/noctane" => resource::include_gen!("noctane"."html"),
+        "/source" => resource::include_gen!("source"."html"),
+        _ => resource::include_gen!("404"."html").status(StatusCode::NOT_FOUND),
     }
     .build();
 

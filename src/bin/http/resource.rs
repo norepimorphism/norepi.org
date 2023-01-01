@@ -4,30 +4,49 @@ use hyper::{header, http, Body, Response, StatusCode};
 
 pub mod mime;
 
-pub use _include as include;
-pub use include_content;
+/// Constructs a new [resource builder](`Builder`) for a file with the given extension.
+///
+/// The MIME type is automatically derived from the file extension.
+macro_rules! for_file_ext {
+    ($ext:literal $(,)?) => {
+        $crate::resource::Builder::new($crate::resource::mime::from_file_ext($file_ext))
+    };
+}
+
+/// The content of the file at the given path within the `${OUT_DIR}/gen/` directory.
+macro_rules! include_gen_content {
+    ($filename:expr $(,)?) => {
+        include_str!(concat!(env!("OUT_DIR"), "/gen/", $filename))
+    };
+}
+
+/// Constructs a new [resource builder](`Builder`) from the file at the given path.
+///
+/// The MIME type is automatically derived from the file extension.
+//
+// Note: this shadows the builtin `include` macro.
+macro_rules! include {
+    ($file_base:literal . $file_ext:literal $(,)?) => {
+        $crate::resource::for_file_ext!($file_ext)
+            .content(include_str!(concat!($file_base, ".", $file_ext)))
+    };
+}
 
 /// Constructs a new [resource builder](`Builder`) from the file at the given path within the
 /// `${OUT_DIR}/gen/` directory.
 ///
 /// The MIME type is automatically derived from the file extension.
-//
-// To avoid shadowing the builtin `include` macro, we prefix this identifier with `_`. It is still
-// exported as `include` because callers will qualify it as `resource::include`, which is
-// disambiguated from the builtin `include` macro.
-macro_rules! _include {
+macro_rules! include_gen {
     ($file_base:literal . $file_ext:literal $(,)?) => {
-        Builder::new(mime::from_file_ext($file_ext))
-            .content($crate::resource::include_content!(concat!($file_base, ".", $file_ext)))
+        $crate::resource::for_file_ext!($file_ext)
+            .content($crate::resource::include_gen_content!(concat!($file_base, ".", $file_ext)))
     };
 }
 
-/// The content of the file at the given path within the `${OUT_DIR}/gen/` directory.
-macro_rules! include_content {
-    ($filename:expr $(,)?) => {
-        include_str!(concat!(env!("OUT_DIR"), "/gen/", $filename))
-    };
-}
+pub use for_file_ext;
+pub use include;
+pub use include_gen;
+pub use include_gen_content;
 
 impl Builder {
     /// Constructs a new builder for a binary resource.
@@ -233,7 +252,7 @@ impl Resource {
         //
         // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.7>.
         let not_acceptable = || {
-            Err(_include!("406"."html").status(StatusCode::NOT_ACCEPTABLE).build().response())
+            Err(include_gen!("406"."html").status(StatusCode::NOT_ACCEPTABLE).build().response())
         };
 
         // RFC 9110, Section 12.5.2:
@@ -282,7 +301,7 @@ impl Resource {
                 //   Accept-Encoding header field in that response, allowing clients to distinguish
                 //   between issues related to content codings and media types.
                 return Err({
-                    _include!("415"."html")
+                    include_gen!("415"."html")
                         .status(StatusCode::UNSUPPORTED_MEDIA_TYPE)
                         .build()
                         .response()
