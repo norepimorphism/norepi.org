@@ -21,7 +21,9 @@ use resource::{Builder as ResourceBuilder, Resource};
 
 mod resource;
 
+/// The *Server* header of a response to a successful request.
 static SERVER: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
+/// The *Allow* header of a response to a successful `OPTIONS` request.
 static ALLOW: &str = "GET, HEAD, OPTIONS";
 
 #[tokio::main]
@@ -72,7 +74,7 @@ async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::E
             // use it.
             let report = Arc::clone(&report);
 
-            let result = Ok::<_, http::Error>(handle_remote(report, sock));
+            let result = Ok::<_, http::Error>(create_service(report, sock));
 
             async move { result }
         }))
@@ -103,10 +105,14 @@ fn tls_key() -> rustls::PrivateKey {
         .expect("RSA private key is missing")
 }
 
-fn handle_remote<'report, 'sock>(
+fn create_service(
     report: Arc<Mutex<csv::Writer<fs::File>>>,
     sock: &AddrStream,
-) -> impl Service<Request<Body>, Response = Response<Body>, Error = http::Error, Future = impl Future<Output = Result<Response<Body>, http::Error>> + Sync> {
+) -> S
+where
+    S: Service<Request<Body>, Response = Response<Body>, Error = http::Error, Future = F>,
+    F: Future<Output = Result<Response<Body>, http::Error>> + Sync,
+{
     let remote_addr = sock.remote_addr();
 
     service_fn(move |req| {
@@ -163,7 +169,7 @@ fn handle_request(
             .status(StatusCode::FORBIDDEN)
             .body({
                 format!(
-                    "You are blocked from accessing this webserver. Reason: {}",
+                    "You are blocked from accessing norepi.org and its subdomains:\n  {}",
                     entry.reason,
                 )
                 .into()
@@ -174,13 +180,10 @@ fn handle_request(
 }
 
 fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
-    tracing::debug!(
-        "{} {}",
-        req.method(),
-        // `req.uri()` is really a *request-target* as specified by Section 5.3 of RFC 7230; see
-        // <https://httpwg.org/specs/rfc7230.html#request-target>.
-        req.uri(),
-    );
+    // `req.uri()` is really a *request-target* as specified by Section 5.3 of RFC 7230; see
+    // <https://httpwg.org/specs/rfc7230.html#request-target>.
+    let req_target = req.uri();
+    tracing::debug!("{} {}", req.method(), req_target);
 
     let response = match req.method() {
         // RFC 9110, Section 9.3.1:
@@ -207,20 +210,50 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
             // TODO: Our approach is to generate a GET response and discard the body and irrelevant
             // fields, though RFC 9110 indicates that this is not preferred. Is there a signficiant
             // performance cost to doing this?
-            get(&req).response().map(|mut res| {
+            get(&req).response().map(|mut response| {
                 // Discard the body.
-                *res.body_mut() = Body::empty();
+                *response.body_mut() = Body::empty();
+                // TODO: Maybe discard *Content-Length* as well?
 
-                res
+                response
             })
         }
-        // `OPTIONS` lists all HTTP methods supported by a resource in the `Allow` header.
+        // RFC 9110, Section 9.3.7:
+        //   The OPTIONS method request information about the communication options available for
+        //   the target resource, at either the origin server or an intervening intermediary.
+        //   ...
+        //   A server generating a successful response to OPTIONS SHOULD send any header that might
+        //   indicate optional features implemented by the server and applicable to the target
+        //   resource (e.g., Allow), including potential extensions not defined by this
+        //   specification.
+        //
+        // See <https://httpwg.org/specs/rfc9110.html#rfc.section.9.3.7>.
         &Method::OPTIONS => {
-            Response::builder()
-                .status(StatusCode::NO_CONTENT)
-                .header("Allow", ALLOW)
-                .body(Body::empty())
+            let response = Response::builder().status(StatusCode::NO_CONTENT);
+
+            // RFC 9110, Section 9.3.7:
+            //   An OPTIONS request with an asterisk ("*") as the request target applies to the
+            //   server in general rather than to a specific resource. Since a server's
+            //   communication options typically depend on the resource, the "*" request is only
+            //   useful as a "ping" or "no-op" type of method; it does nothing beyond allowing the
+            //   client to test the capabilities of the server.
+            if req_target == b"*" {
+                response.body(Body::empty())
+            } else {
+                response
+                    // TODO: In the future, not all resources might implement the methods described
+                    // by [`ALLOW`]. We should have a more fine-grained approach.
+                    .header("Allow", ALLOW)
+                    .body(Body::empty())
+            }
         }
+        // RFC 9110, Section 15.5.6:
+        //   The 405 (Method Not Allowed) status code indicates that the method received in the
+        //   request-line is known by the origin server but not supported by the target resource.
+        //   The origin server MUST generate an Allow header field in a 405 response containing a
+        //   list of the target resource's currently supported methods.
+        //
+        // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.6>.
         &Method::POST
         | &Method::PUT
         | &Method::DELETE
@@ -229,12 +262,15 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
         | &Method::PATCH => {
             resource::include!("405"."html")
                 .status(StatusCode::METHOD_NOT_ALLOWED)
+                .header("Allow", ALLOW)
                 .build()
                 .response()
         }
         // RFC 9110, Section 15.6.2:
-        //   [501 (Not Implemented)] is the appropriate response when the server does not recognize
-        //   the request method and is not capable of supporting it for any resource.
+        //   The 501 (Not Implemented) status code indicates that the server does not support the
+        //   functionality required to fulfill the request. This is the appropriate response when
+        //   the server does not recognize the request method and is not capable of supporting it
+        //   for any resource.
         //
         // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.6.2>.
         _ => {
@@ -261,24 +297,24 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
 
 fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
     let resource = match req.uri().path() {
-        "/" => resource::include!("index"."html"),
+        "/robots.txt" => resource::include!("robots"."txt"),
         "/base.css" => resource::include!("base"."css"),
         "/error.css" => resource::include!("error"."css"),
+        "/" => resource::include!("index"."html"),
         "/contact" => resource::include!("contact"."html"),
         "/noctane" => resource::include!("noctane"."html"),
         "/source" => resource::include!("source"."html"),
-        "/robots.txt" => resource::include!("robots"."txt"),
         _ => resource::include!("404"."html").status(StatusCode::NOT_FOUND),
     }
     .build();
 
-    match resource.check_request_is_well_formed(&req) {
+    match resource.is_compatible_with_request(&req) {
         Ok(_) => resource.response(),
-        Err(res) => {
-            tracing::error!("request was malformed");
+        Err(response) => {
+            tracing::error!("content negotiation failed");
 
-            // The request was malformed, so a response containing error information was returned.
-            res
+            // A response containing error information was returned.
+            response
         }
     }
 }

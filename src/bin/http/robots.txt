@@ -1,3 +1,19 @@
+# The www.norepi.org Robots Exclusion Standard (colloq. robots.txt).
+#
+# See <robotstxt.org> for an informal robots.txt specification.
+
+# In general, non-human hosts are permitted to interact with www.norepi.org unless they are grossly
+# impolite or downright malicious.
+#
+# As a rule of thumb:
+# - Send a GET request to robots.txt before doing anything else.
+# - Wait a few milliseconds before sending your next request.
+# - Don't probe for software vulnerabilites, even if you plan to responsibly disclose them. I have
+#   no way of knowing your intentions, and you will probably be banned indefinitely.
+
 User-agent: *
-# This is a honeypot for bad robots. Do not access this resource if you are human.
+# This is a honeypot for malicious robots that scrape robots.txt to find interesting URIs.
+#
+# Do not access this resource. As the URI warns, you may be banned.
 Disallow: /you-may-be-banned-if-you-access-this-resource
+# Everything else is fair game.
