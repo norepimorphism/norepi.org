@@ -2,6 +2,8 @@
 
 use std::{future::Future, process};
 
+pub mod bind;
+
 pub async fn run<E, O>(serve: impl Fn() -> O) -> process::ExitCode
 where
     E: std::error::Error,

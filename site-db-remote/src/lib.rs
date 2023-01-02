@@ -1,9 +1,76 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use super::ty::{Duration, PascalString, Timestamp};
+//! Known remote hosts.
+
+use bitflags::bitflags;
+use norepi_site_db_types::{Duration, PascalString, Timestamp};
+
+pub mod ipv4;
+pub mod ipv6;
 
 #[derive(Default, serde::Deserialize)]
-pub struct Entry {
+pub struct Host {
+    blocklist_entry: BlocklistEntry,
+    offenses: HostOffenses,
+}
+
+impl Host {
+    pub fn is_blocked(&self) -> bool {
+        self.is_banned() || self.is_suspended()
+    }
+
+    pub fn is_suspended(&self) -> bool {
+        self.blocklist_entry.suspensions.contains_active()
+    }
+
+    pub fn is_banned(&self) -> bool {
+        self.blocklist_entry.ban.is_some()
+    }
+
+    pub fn offenses(&self) -> HostOffenses {
+        self.offenses
+    }
+}
+
+pub enum SuspendHostError {
+    AlreadyBlocked,
+    FailedToPush(PushSuspensionError),
+}
+
+impl Host {
+    pub fn suspend(&mut self, duration: impl Duration) -> Result<(), SuspendHostError> {
+        if self.is_blocked() {
+            Err(SuspendHostError::AlreadyBlocked)
+        } else {
+            let sus = Suspension::for_duration_from_now(duration);
+
+            self.blocklist_entry.suspensions.push(sus).map_err(SuspendHostError::FailedToPush)
+        }
+    }
+}
+
+pub enum BanHostError {
+    AlreadyBlocked,
+}
+
+impl Host {
+    pub fn ban(&mut self) -> Result<(), BanHostError> {
+        if self.is_blocked() {
+            Err(BanHostError::AlreadyBlocked)
+        } else {
+            self.blocklist_entry.ban = Some(Ban::now());
+
+            Ok(())
+        }
+    }
+
+    pub fn blocklist_entry(&self) -> &BlocklistEntry {
+        &self.blocklist_entry
+    }
+}
+
+#[derive(Default, serde::Deserialize)]
+pub struct BlocklistEntry {
     pub suspensions: Suspensions,
     pub ban: Option<Ban>,
 }
@@ -93,9 +160,7 @@ impl Suspension {
     pub fn for_months_from_now(months: chrono::Months) -> Self {
         Self::for_duration_from_now(months)
     }
-}
 
-impl Suspension {
     pub fn for_duration_from_now(duration: impl Duration) -> Self {
         let now = Timestamp::now();
 
@@ -154,5 +219,19 @@ impl Ban {
 
     pub fn comment(&self) -> &PascalString {
         &self.comment
+    }
+}
+
+
+impl Default for HostOffenses {
+    fn default() -> Self {
+        HostOffenses::empty()
+    }
+}
+
+bitflags! {
+    #[derive(serde::Deserialize)]
+    pub struct HostOffenses: u32 {
+        const ATTEMPTED_TO_ACCESS_ADMIN_PANEL = 1 << 0;
     }
 }

@@ -26,6 +26,7 @@ chrono = "0.4"
 csv = "1.1"
 dirs = "4.0"
 hyper = { version = "0.14", features = ["http1", "http2", "server", "tcp", "runtime"] }
+norepi-site-db-remote = { path = "../site-db-remote" }
 norepi-site-util = { path = "../site-util" }
 rustls = "0.20"
 rustls-pemfile = "1.0"
