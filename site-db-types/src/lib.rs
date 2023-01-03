@@ -4,10 +4,6 @@
 
 use std::{fmt, ops::Add};
 
-pub use backing::Backing;
-
-pub mod backing;
-
 pub type UtcDateTime = chrono::DateTime<chrono::Utc>;
 
 pub trait Duration {

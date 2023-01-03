@@ -4,63 +4,12 @@
 
 use std::{mem, net::Ipv4Addr, num::NonZeroU32};
 
-use norepi_site_db_types::{backing, Backing};
+use memmap::MmapMut;
 
 use crate::Host;
 
 /// The size, in bytes, of a [`Header`] or [`Node`].
-const BLOCK_SIZE: u64 = 1024;
-
-impl<'b, B: Backing> Table<'b, B> {
-    pub fn new(backing: &'b mut B) -> Self {
-        // Note: this will panic if it fails, but that's okay because everything would explode
-        // otherwise.
-        // TODO: can we call this in a .init constructor or something? Or is that like, a really bad
-        // idea?
-        check_layout();
-
-        Self {
-            header: Header::new(),
-            backing,
-        }
-    }
-}
-
-pub enum LoadError {
-    BackingLen(backing::LenError),
-    Empty,
-    HeaderIsIncomplete,
-    BackingRead(backing::ReadError),
-}
-
-impl<'b, B: Backing> Table<'b, B> {
-    pub unsafe fn load(backing: &'b mut B) -> Result<Self, LoadError> {
-        // Note: this will panic if it fails, but that's okay because everything would explode
-        // otherwise.
-        check_layout();
-
-        let len = backing.len().map_err(LoadError::BackingLen)?;
-        if len == 0 {
-            return Err(LoadError::Empty);
-        }
-        if len < BLOCK_SIZE {
-            return Err(LoadError::HeaderIsIncomplete);
-        }
-
-        #[cfg(target_pointer_width = "8")]
-        {
-            compile_error!("usize is too small to accomodate BLOCK_SIZE");
-        }
-
-        // TODO: do we really need to zero-initialize this array?
-        let mut header = [0; mem::size_of::<Header>()];
-        backing.read(0, &mut header).map_err(LoadError::BackingRead)?;
-        // SAFETY: TODO
-        let header: Header = mem::transmute(header);
-
-        Ok(Self { header, backing })
-    }
-}
+const BLOCK_SIZE: usize = 1024;
 
 /// Asserts that table blocks will be laid out in memory correctly.
 ///
@@ -70,40 +19,114 @@ impl<'b, B: Backing> Table<'b, B> {
 ///
 /// If either [`Header`] or [`Node`] are not of size [`BLOCK_SIZE`], this function will panic.
 fn check_layout() {
-    let header_size = u64::try_from(mem::size_of::<Header>()).unwrap();
+    let header_size = mem::size_of::<Header>();
     if header_size != BLOCK_SIZE {
         panic!("sizeof(Header) is {}; should be BLOCK_SIZE", header_size);
     }
 
-    let node_size = u64::try_from(mem::size_of::<Node>()).unwrap();
+    let node_size = mem::size_of::<Node>();
     if node_size != BLOCK_SIZE {
         panic!("sizeof(Node) is {}; should be BLOCK_SIZE", node_size);
     }
 }
 
-pub struct Table<'b, B> {
-    header: Header,
-    backing: &'b mut B,
+impl Table {
+    pub fn new(mmap: MmapMut) -> Self {
+        // Note: this will panic if it fails, but that's okay because everything would explode
+        // otherwise.
+        // TODO: can we call this in a .init constructor or something? Or is that like, a really bad
+        // idea?
+        check_layout();
+
+        Self {
+            header: Header::new(),
+            mmap,
+        }
+    }
 }
 
-impl<'b, B: Backing> Table<'b, B> {
-    pub fn flush(&mut self) {
-        let header = std::slice::from_ref(&self.header);
-        // SAFETY: TODO
-        let header = unsafe {
-            std::slice::from_raw_parts(
-                header.as_ptr().cast::<u8>(),
-                mem::size_of::<Header>(),
-            )
-        };
-        // Write our copy of the header to the backing.
-        // TODO: should we catch errors?
-        let _ = self.backing.write(0, header);
+pub enum LoadError {
+    TooBig,
+    Empty,
+    IncompleteHeader,
+    InvalidHeader(bytemuck::PodCastError),
+}
 
-        self.backing.flush();
+impl Table {
+    pub fn load(mut mmap: MmapMut) -> Result<Self, LoadError> {
+        // Note: this will panic if it fails, but that's okay because everything would explode
+        // otherwise.
+        check_layout();
+
+        let len = mmap.len();
+        if len == 0 {
+            return Err(LoadError::Empty);
+        }
+        if len < BLOCK_SIZE {
+            return Err(LoadError::IncompleteHeader);
+        }
+
+        let header = mmap.get_header_mut();
+        let header: &mut Header = bytemuck::try_from_bytes_mut(header)
+            .map_err(LoadError::InvalidHeader)?;
+        let header = *header;
+
+        Ok(Self { header, mmap })
+    }
+}
+
+trait MmapExt {
+    fn get_header(&self) -> &[u8] {
+        self.get_block(0)
     }
 
-    pub fn entry(&mut self, addr: Ipv4Addr) -> HostEntry<'b> {
+    fn get_header_mut(&mut self) -> &mut [u8] {
+        self.get_block_mut(0)
+    }
+
+    fn get_block(&self, index: usize) -> &[u8];
+
+    fn get_block_mut(&mut self, index: usize) -> &mut [u8];
+}
+
+impl MmapExt for MmapMut {
+    fn get_block(&self, index: usize) -> &[u8] {
+        get_block_impl(index, |start, end| &self[start..end])
+    }
+
+    fn get_block_mut(&mut self, index: usize) -> &mut [u8] {
+        get_block_impl(index, |start, end| &mut self[start..end])
+    }
+}
+
+fn get_block_impl<'a, T: 'a + AsRef<[u8]>>(
+    index: usize,
+    get: impl 'a + FnOnce(usize, usize) -> T,
+) -> T {
+    let start = BLOCK_SIZE * index;
+    let end = BLOCK_SIZE * (index + 1);
+    let block = get(start, end);
+    assert_eq!(block.as_ref().len(), BLOCK_SIZE);
+
+    block
+}
+
+pub struct Table {
+    header: Header,
+    mmap: MmapMut,
+}
+
+impl Table {
+    pub fn flush(&mut self) {
+        let header = bytemuck::bytes_of(&self.header);
+        // Write our copy of the header to the backing.
+        let _ = self.mmap.get_header_mut().copy_from_slice(header);
+
+        // TODO: should we catch errors?
+        let _ = self.mmap.flush();
+    }
+
+    pub fn entry(&mut self, addr: Ipv4Addr) -> HostEntry {
         todo!()
     }
 }
@@ -126,17 +149,23 @@ impl<'a> VacantHostEntry<'a> {
 impl Header {
     fn new() -> Self {
         Self {
-            next_free_node: NodeHandle::first(),
+            next_free_node: Some(NodeHandle::first()),
             root: Subnet::default(),
         }
     }
 }
 
-#[repr(packed(4))]
+#[repr(C, packed(4))]
+#[derive(Clone, Copy)]
 struct Header {
-    next_free_node: NodeHandle,
+    next_free_node: Option<NodeHandle>,
     root: Subnet,
 }
+
+// SAFETY: TODO
+unsafe impl bytemuck::Pod for Header {}
+// SAFETY: TODO
+unsafe impl bytemuck::Zeroable for Header {}
 
 impl NodeHandle {
     fn first() -> Self {
@@ -170,9 +199,8 @@ impl NodeHandle {
         Some(Self { inner: self.inner.checked_add(1)? })
     }
 
-    /// The byte address of this node.
-    fn addr(self) -> u64 {
-        BLOCK_SIZE * u64::from(self.inner.get())
+    fn index(self) -> u32 {
+        self.inner.get()
     }
 }
 
@@ -190,4 +218,10 @@ impl Default for Subnet {
 }
 
 #[repr(transparent)]
+#[derive(Clone, Copy)]
 struct Subnet([Option<NodeHandle>; 255]);
+
+// SAFETY: TODO
+unsafe impl bytemuck::Pod for Subnet {}
+// SAFETY: TODO
+unsafe impl bytemuck::Zeroable for Subnet {}

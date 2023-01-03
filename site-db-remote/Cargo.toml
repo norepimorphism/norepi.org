@@ -14,10 +14,10 @@ name = "norepi-dbd"
 path = "src/bin/server.rs"
 
 [dependencies]
-bincode = "1.3"
 bitflags = "1.3"
+bytemuck = "1.12"
 chrono = "0.4"
 dirs = "4.0"
+memmap = "0.7"
 norepi-site-db-types = { path = "../site-db-types" }
-serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1"

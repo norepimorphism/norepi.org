@@ -5,10 +5,11 @@
 use bitflags::bitflags;
 use norepi_site_db_types::{Duration, PascalString, Timestamp};
 
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64", target_pointer_width = "128"))]
 pub mod ipv4;
 pub mod ipv6;
 
-#[derive(Default, serde::Deserialize)]
+#[derive(Default)]
 pub struct Host {
     blocklist_entry: BlocklistEntry,
     offenses: HostOffenses,
@@ -69,13 +70,13 @@ impl Host {
     }
 }
 
-#[derive(Default, serde::Deserialize)]
+#[derive(Default)]
 pub struct BlocklistEntry {
     pub suspensions: Suspensions,
     pub ban: Option<Ban>,
 }
 
-#[derive(Clone, Default, serde::Deserialize)]
+#[derive(Clone, Default)]
 pub enum Suspensions {
     #[default]
     Zero,
@@ -172,7 +173,7 @@ impl Suspension {
     }
 }
 
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone)]
 pub struct Suspension {
     start: Timestamp,
     end: Timestamp,
@@ -206,7 +207,6 @@ impl Ban {
     }
 }
 
-#[derive(serde::Deserialize)]
 pub struct Ban {
     start: Timestamp,
     comment: PascalString,
@@ -230,7 +230,6 @@ impl Default for HostOffenses {
 }
 
 bitflags! {
-    #[derive(serde::Deserialize)]
     pub struct HostOffenses: u32 {
         const ATTEMPTED_TO_ACCESS_ADMIN_PANEL = 1 << 0;
     }
