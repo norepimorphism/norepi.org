@@ -11,33 +11,32 @@ use crate::Host;
 /// The size, in bytes, of a [`Header`] or [`Node`].
 const BLOCK_SIZE: usize = 1024;
 
+const _: () = check_layout();
+
 /// Asserts that table blocks will be laid out in memory correctly.
 ///
-/// This function should be called before reading or writing any blocks.
+/// This function should be called in a `const` context at compile-time.
 ///
 /// # Panics
 ///
 /// If either [`Header`] or [`Node`] are not of size [`BLOCK_SIZE`], this function will panic.
-fn check_layout() {
+const fn check_layout() {
     let header_size = mem::size_of::<Header>();
-    if header_size != BLOCK_SIZE {
-        panic!("sizeof(Header) is {}; should be BLOCK_SIZE", header_size);
-    }
+    const_panic::concat_assert!(header_size == BLOCK_SIZE);
 
     let node_size = mem::size_of::<Node>();
-    if node_size != BLOCK_SIZE {
-        panic!("sizeof(Node) is {}; should be BLOCK_SIZE", node_size);
-    }
+    const_panic::concat_assert!(
+        node_size == BLOCK_SIZE,
+        "Node size (",
+        node_size,
+        ") != BLOCK_SIZE (",
+        BLOCK_SIZE,
+        ")\n",
+    );
 }
 
 impl Table {
     pub fn new(mmap: MmapMut) -> Self {
-        // Note: this will panic if it fails, but that's okay because everything would explode
-        // otherwise.
-        // TODO: can we call this in a .init constructor or something? Or is that like, a really bad
-        // idea?
-        check_layout();
-
         Self {
             header: Header::new(),
             mmap,
@@ -54,10 +53,6 @@ pub enum LoadError {
 
 impl Table {
     pub fn load(mut mmap: MmapMut) -> Result<Self, LoadError> {
-        // Note: this will panic if it fails, but that's okay because everything would explode
-        // otherwise.
-        check_layout();
-
         let len = mmap.len();
         if len == 0 {
             return Err(LoadError::Empty);
@@ -205,7 +200,8 @@ impl NodeHandle {
 }
 
 // The `repr(u32)` forces the discriminant to be of type `u32`.
-#[repr(u32)]
+#[repr(C, u32)]
+#[allow(unused)]
 enum Node {
     Subnet(Subnet),
     Host(Host),

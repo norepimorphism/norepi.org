@@ -17,6 +17,7 @@ path = "src/bin/server.rs"
 bitflags = "1.3"
 bytemuck = "1.12"
 chrono = "0.4"
+const_panic = "0.2"
 dirs = "4.0"
 memmap = "0.7"
 norepi-site-db-types = { path = "../site-db-types" }
