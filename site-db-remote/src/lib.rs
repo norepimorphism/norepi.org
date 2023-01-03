@@ -2,6 +2,8 @@
 
 //! Known remote hosts.
 
+#![feature(mem_copy_fn, unchecked_math)]
+
 use bitflags::bitflags;
 use norepi_site_db_types::{Duration, PascalString, Timestamp};
 
