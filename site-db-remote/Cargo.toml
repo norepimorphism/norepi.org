@@ -10,7 +10,7 @@ license = "MPL-2.0"
 path = "src/lib.rs"
 
 [[bin]]
-name = "norepi-dbd"
+name = "norepi-db-remoted"
 path = "src/bin/server.rs"
 
 [dependencies]

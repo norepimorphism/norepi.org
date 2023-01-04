@@ -7,9 +7,93 @@
 use bitflags::bitflags;
 use norepi_site_db_types::{Duration, PascalString, Timestamp};
 
+pub use server::Server;
+
+pub mod client;
 #[cfg(any(target_pointer_width = "32", target_pointer_width = "64", target_pointer_width = "128"))]
-pub mod ipv4;
-pub mod ipv6;
+pub mod server;
+
+static SOCKET_NAME: &str = "site-db-remote";
+
+#[derive(Debug)]
+enum DecodeRequestError {
+    InvalidProtocol,
+    InvalidIntent,
+}
+
+impl Request {
+    fn decode(value: [u8; 2]) -> Result<Self, DecodeRequestError> {
+        Ok(Self {
+            proto: Protocol::decode(value[0]).ok_or(DecodeRequestError::InvalidProtocol)?,
+            intent: RequestIntent::decode(value[1]).ok_or(DecodeRequestError::InvalidIntent)?,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Request {
+    proto: Protocol,
+    intent: RequestIntent,
+}
+
+impl Request {
+    fn encode(self) -> [u8; 2] {
+        [self.proto.encode(), self.intent.encode()]
+    }
+}
+
+impl Protocol {
+    fn decode(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Any),
+            1 => Some(Self::Ipv4),
+            2 => Some(Self::Ipv6),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum Protocol {
+    Any,
+    Ipv4,
+    Ipv6,
+}
+
+impl Protocol {
+    fn encode(self) -> u8 {
+        match self {
+            Self::Any => 0,
+            Self::Ipv4 => 1,
+            Self::Ipv6 => 2,
+        }
+    }
+}
+
+impl RequestIntent {
+    fn decode(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::GetHost),
+            1 => Some(Self::SetHost),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum RequestIntent {
+    GetHost,
+    SetHost,
+}
+
+impl RequestIntent {
+    fn encode(self) -> u8 {
+        match self {
+            Self::GetHost => 0,
+            Self::SetHost => 1,
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone, Default)]
