@@ -2,7 +2,7 @@
 
 //! Known remote hosts.
 
-#![feature(mem_copy_fn, unchecked_math)]
+#![feature(mem_copy_fn, nonzero_min_max, unchecked_math)]
 
 use bitflags::bitflags;
 use norepi_site_db_types::{Duration, PascalString, Timestamp};
