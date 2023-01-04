@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-/// Custom data types for use in a database.
+//! Custom data types for use in a database.
 
 use std::{fmt, ops::Add};
 
@@ -41,7 +41,7 @@ impl From<UtcDateTime> for Timestamp {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, serde::Deserialize)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
 pub struct Timestamp(i64);
 
 impl Timestamp {
@@ -83,7 +83,7 @@ impl Default for PascalString {
 }
 
 impl PascalString {
-    const CAPACITY: usize = 512 - std::mem::align_of::<u8>();
+    const CAPACITY: usize = 64 - std::mem::align_of::<u8>();
 
     /// Creates an empty string.
     pub fn new() -> Self {
@@ -95,12 +95,16 @@ impl PascalString {
 }
 
 /// A length-prefixed, fixed-capacity ASCII string for use in databases.
-#[derive(Clone, serde::Deserialize)]
+#[repr(C, packed)]
+#[derive(Copy, Clone)]
 pub struct PascalString {
     len: u8,
-    #[serde(with = "serde_big_array::BigArray")]
     content: [u8; Self::CAPACITY],
 }
+
+// SAFETY: TODO
+unsafe impl bytemuck::Pod for PascalString {}
+unsafe impl bytemuck::Zeroable for PascalString {}
 
 impl fmt::Display for PascalString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

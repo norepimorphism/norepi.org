@@ -39,14 +39,16 @@
 //! This makes [`Table`] *great* for forwards lookups but *terrible* for reverse lookups and
 //! counting how many host records are stored.
 
-
 use std::{fs, io, mem, net::Ipv4Addr, num::NonZeroU32, ops::Range, path::Path};
 
 use memmap::{MmapMut, MmapOptions};
 
 use crate::Host;
 
-/// The size, in bytes, of a [`Header`] or [`Node`].
+/// The size, in bytes, of a block.
+///
+/// A block is a 1024-byte sequence within a table buffer that is disambiguated by context to be
+/// a [`Header`], [`Subnet`], or [`Host`].
 const BLOCK_SIZE: usize = 1024;
 
 // Run [`check_layout`] at compile time.
@@ -58,28 +60,30 @@ const _: () = check_layout();
 ///
 /// # Panics
 ///
-/// If either [`Header`] or [`Node`] are not of size [`BLOCK_SIZE`], this function will panic.
+/// If [`Header`], [`Subnet`], or [`Host`] are not of size [`BLOCK_SIZE`], this function will panic.
 #[allow(unused)]
 const fn check_layout() {
-    let header_size = mem::size_of::<Header>();
-    const_panic::concat_assert!(
-        header_size == BLOCK_SIZE,
-        "Header size (",
-        header_size,
-        ") != BLOCK_SIZE (",
-        BLOCK_SIZE,
-        ")\n",
-    );
+    macro_rules! assert_ty_size_eq {
+        ($ty:ty, $exp_size:expr $(,)?) => {{
+            let ty_size = mem::size_of::<$ty>();
+            const_panic::concat_assert!(
+                ty_size == $exp_size,
+                stringify!($ty),
+                " size (",
+                ty_size,
+                ") != ",
+                stringify!($exp_size),
+                " (",
+                $exp_size,
+                ")\n",
+            );
+        }};
+    }
 
-    let node_size = mem::size_of::<Node>();
-    const_panic::concat_assert!(
-        node_size == BLOCK_SIZE,
-        "Node size (",
-        node_size,
-        ") != BLOCK_SIZE (",
-        BLOCK_SIZE,
-        ")\n",
-    );
+    assert_ty_size_eq!(Header, BLOCK_SIZE);
+    assert_ty_size_eq!(Subnet, BLOCK_SIZE);
+    assert_ty_size_eq!(Host, BLOCK_SIZE);
+    assert_ty_size_eq!(HeaderStamp, mem::size_of::<u32>());
 }
 
 /// An error returned by [`open_file`].
@@ -90,6 +94,14 @@ pub enum OpenFileError {
     Map(io::Error),
     /// The call to [`Table::new`] or [`Table::load`] failed.
     CreateTable(CreateTableError),
+}
+
+/// An error contained in [`OpenFileError`].
+pub enum CreateTableError {
+    /// The call to [`Table::new`] failed.
+    New(NewTableError),
+    /// The call to [`Table::load`] failed.
+    Load(LoadTableError),
 }
 
 /// Attempts to load a [table](`Table`) from the file at the given path, or creates a new table if
@@ -115,19 +127,19 @@ pub fn open_file(path: impl AsRef<Path>) -> Result<Table, OpenFileError> {
     let mmap = unsafe { mmap_opts.map_mut(&file) }.map_err(OpenFileError::Map)?;
 
     if file_is_new {
-        Table::new(mmap)
+        Table::new(mmap).map_err(CreateTableError::New)
     } else {
-        Table::load(mmap)
+        Table::load(mmap).map_err(CreateTableError::Load)
     }
     .map_err(OpenFileError::CreateTable)
 }
 
-/// An error returned by [`Table::new`] or [`Table::load`].
-pub enum CreateTableError {
-    /// The buffer is too small to contain a complete table header.
+/// An error returned by [`Table::new`].
+pub enum NewTableError {
+    /// The buffer is too small to contain a valid table.
     ///
-    /// This error is returned when the buffer is less than 1024 bytes in size.
-    IncompleteHeader,
+    /// This error is returned when the buffer is less than 2048 bytes in size.
+    BufferTooSmall,
 }
 
 impl Table {
@@ -140,10 +152,25 @@ impl Table {
     /// # Errors
     ///
     /// [`MmapError::IncompleteHeader`] is returned when `mmap` is less than 1024 bytes in size.
-    pub fn new(mmap: MmapMut) -> Result<Self, CreateTableError> {
-        Self::with_mmap(mmap, |_| Header::new())
+    pub fn new(mmap: MmapMut) -> Result<Self, NewTableError> {
+        Self::with_mmap(
+            mmap,
+            |_| Ok(Header::new()),
+            |_| Ok(Subnet::new()),
+            NewTableError::BufferTooSmall,
+        )
     }
+}
 
+pub enum LoadTableError {
+    /// The buffer is too small to contain a valid table.
+    ///
+    /// This error is returned when the buffer is less than 2048 bytes in size.
+    BufferTooSmall,
+    InvalidHeaderStamp,
+}
+
+impl Table {
     /// Loads a table from the given buffer.
     ///
     /// Changes to the table are written back to the buffer.
@@ -151,27 +178,63 @@ impl Table {
     /// # Arguments
     ///
     /// `mmap` is a mutable memory-mapped buffer.
-    pub fn load(mmap: MmapMut) -> Result<Self, CreateTableError> {
-        Self::with_mmap(mmap, |mmap| {
-            // SAFETY: [`with_mmap`] has guaranteed that the buffer contains a complete header.
-            let header = unsafe { mmap.get_header_unchecked() };
-            let header: &Header = bytemuck::from_bytes(header);
+    pub fn load(mmap: MmapMut) -> Result<Self, LoadTableError> {
+        Self::with_mmap(
+            mmap,
+            |mmap| {
+                // SAFETY: [`with_mmap`] has guaranteed that the buffer contains a complete header.
+                let header = unsafe { mmap.get_header_unchecked() };
 
-            mem::copy(header)
-        })
+                let stamp = &header[..mem::size_of::<HeaderStamp>()];
+                let stamp: &HeaderStamp = bytemuck::from_bytes(stamp);
+
+                match stamp {
+                    HeaderStamp::Invalid => Err(LoadTableError::InvalidHeaderStamp),
+                    HeaderStamp::Valid { next_free_node } => {
+                        // SAFETY: the stamp is valid, so there shouldn't be any invalid bit
+                        // patterns.
+                        Ok(unsafe {
+                            std::ptr::read(header.as_ptr().cast::<Header>())
+                        })
+                    }
+                }
+            },
+            |mmap| {
+                todo!()
+            },
+            LoadTableError::BufferTooSmall,
+        )
     }
+}
 
-    fn with_mmap(
+#[repr(C)]
+#[derive(Clone, Copy)]
+enum HeaderStamp {
+    Valid {
+        next_free_node: NodeHandle,
+    },
+    Invalid,
+}
+
+// SAFETY: `HeaderStamp` has the same representation as `Option<NonZeroU32>`.
+unsafe impl bytemuck::Pod for HeaderStamp {}
+unsafe impl bytemuck::Zeroable for HeaderStamp {}
+
+impl Table {
+    fn with_mmap<E>(
         mmap: MmapMut,
-        get_header: impl FnOnce(&MmapMut) -> Header,
-    ) -> Result<Self, CreateTableError> {
+        get_header: impl FnOnce(&MmapMut) -> Result<Header, E>,
+        get_top_level_subnet: impl FnOnce(&MmapMut) -> Result<Subnet, E>,
+        too_small_error: E,
+    ) -> Result<Self, E> {
         match BufferSize::from_mmap(&mmap) {
-            BufferSize::IncompleteHeader => Err(CreateTableError::IncompleteHeader),
+            BufferSize::TooSmall => Err(too_small_error),
             BufferSize::Blocks(block_count) => {
                 Ok(Self {
-                    header: get_header(&mmap),
-                    mmap,
+                    header: get_header(&mmap)?,
+                    top_level_subnet: get_top_level_subnet(&mmap)?,
                     block_count,
+                    mmap,
                 })
             }
         }
@@ -189,8 +252,8 @@ impl From<usize> for BufferSize {
         // The number of whole nodes that will fit into a buffer of the given size.
         let blocks = size / BLOCK_SIZE;
 
-        if blocks == 0 {
-            Self::IncompleteHeader
+        if blocks < 2 {
+            Self::TooSmall
         } else {
             Self::Blocks(blocks)
         }
@@ -199,11 +262,13 @@ impl From<usize> for BufferSize {
 
 /// The relevant size of a [buffer](`MmapMut`).
 enum BufferSize {
-    /// The buffer is too small to contain a complete [table header](`Header`).
-    IncompleteHeader,
-    /// The buffer contains a complete [header](`Header`) and can accomodate this number of blocks.
+    /// The buffer is too small to contain a complete [table header](`Header`) and top-level
+    /// [subnet](`Subnet`).
+    TooSmall,
+    /// The buffer contains a complete [header](`Header`) and top-level [subnet](`Subnet`) and can
+    /// accomodate this number of blocks.
     ///
-    /// This value is guaranteed to be at least one.
+    /// This value is guaranteed to be at least two, including the header and top-level subnet.
     Blocks(usize),
 }
 
@@ -247,6 +312,10 @@ trait BufferExt {
     ///
     /// The underlying buffer must be large enough to accomodate the table header.
     unsafe fn get_header_unchecked_mut(&mut self) -> &mut [u8];
+
+    fn get_node(&self, handle: NodeHandle) -> Option<&[u8]>;
+
+    fn get_node_mut(&mut self, handle: NodeHandle) -> Option<&mut [u8]>;
 }
 
 impl<T: Buffer> BufferExt for T {
@@ -256,6 +325,14 @@ impl<T: Buffer> BufferExt for T {
 
     unsafe fn get_header_unchecked_mut(&mut self) -> &mut [u8] {
         self.get_block_unchecked_mut(0)
+    }
+
+    fn get_node(&self, handle: NodeHandle) -> Option<&[u8]> {
+        self.get_block(handle.block_index())
+    }
+
+    fn get_node_mut(&mut self, handle: NodeHandle) -> Option<&mut [u8]> {
+        self.get_block_mut(handle.block_index())
     }
 }
 
@@ -291,13 +368,18 @@ fn get_block_impl<'a, T: 'a>(
 
 pub struct Table {
     header: Header,
-    mmap: MmapMut,
+    top_level_subnet: Subnet,
     block_count: usize,
+    mmap: MmapMut,
 }
 
 impl Table {
     pub fn flush(&mut self) -> io::Result<()> {
-        let header = bytemuck::bytes_of(&self.header);
+        let header = std::slice::from_ref(&self.header);
+        // SAFETY: TODO
+        let header: &[u8] = unsafe {
+            std::slice::from_raw_parts(header.as_ptr().cast(), mem::size_of::<Header>())
+        };
         // Write our copy of the header to the buffer.
         // SAFETY: [`with_mmap`] guaranteed that the buffer contains a complete header.
         let _ = unsafe { self.mmap.get_header_unchecked_mut() }.copy_from_slice(header);
@@ -305,37 +387,82 @@ impl Table {
         // TODO: should we take a more granular approach to flushing?
         self.mmap.flush()
     }
+}
 
-    pub fn entry(&mut self, addr: Ipv4Addr) -> Result<HostEntry, ()> {
-        let subnet = &mut self.header.root;
+impl Drop for Table {
+    fn drop(&mut self) {
+        // Let's try to flush the table a few times in case the first couple attempts fail.
+        for _ in 0..3 {
+            if self.flush().is_ok() {
+                return;
+            }
+        }
+        tracing::error!("failed to flush table");
+    }
+}
 
-        let mut octets = addr.octets().into_iter().peekable();
-        while let Some(octet) = octets.next() {
-            match subnet.get_mut(octet) {
-                Some(node_handle) => {
-                    let node_handle = mem::copy(node_handle);
-                    drop(subnet);
+pub enum TableEntryError {
+    FollowedInvalidNodeHandle,
+}
 
-                    if self.contains_node(node_handle) {
+pub enum HostEntry<'a> {
+    Occupied(&'a mut Host),
+    Vacant(VacantHostEntry<'a>),
+}
 
-                    } else {
+impl<'a> HostEntry<'a> {
+    fn vacant(subnet_elem: &'a mut Option<NodeHandle>) -> Self {
+        Self::Vacant(VacantHostEntry { subnet_elem })
+    }
+}
 
+pub struct VacantHostEntry<'a> {
+    subnet_elem: &'a mut Option<NodeHandle>,
+}
+
+impl<'a> VacantHostEntry<'a> {
+    pub fn insert(self, _host: Host) -> &'a mut Host {
+        todo!()
+    }
+}
+
+impl Table {
+    pub fn entry(&mut self, addr: Ipv4Addr) -> Result<HostEntry, TableEntryError> {
+        let mut current_subnet = &mut self.top_level_subnet;
+
+        let octets = addr.octets();
+        let mut subnet_indices = octets.iter().take(3).copied();
+        let host_index = octets[3];
+
+        while let Some(index) = subnet_indices.next() {
+            match current_subnet.get_mut(index) {
+                &mut Some(node_handle) => {
+                    match self.mmap.get_node_mut(node_handle) {
+                        Some(subnet) => {
+                            current_subnet = bytemuck::from_bytes_mut(subnet);
+                        }
+                        None => {
+                            return Err(TableEntryError::FollowedInvalidNodeHandle);
+                        }
                     }
                 }
-                entry @ None => {
-                    if octets.peek().is_none() {
-                        // This is the last octet, and the host entry is vacant.
-                        return Ok(HostEntry::vacant(entry));
-                    } else {
-                        // This is *not* the last octet. We need to create new subnets as well as
-                        // the host entry.
-                        todo!()
-                    }
+                None => {
+                    todo!()
                 }
             }
         }
 
-        todo!()
+        match current_subnet.get_mut(host_index) {
+            &mut Some(node_handle) => {
+                match self.mmap.get_node_mut(node_handle) {
+                    Some(host) => {
+                        Ok(HostEntry::Occupied(bytemuck::from_bytes_mut(host)))
+                    }
+                    None => Err(TableEntryError::FollowedInvalidNodeHandle),
+                }
+            }
+            elem @ None => Ok(HostEntry::vacant(elem)),
+        }
     }
 
     fn contains_node(&self, node: NodeHandle) -> bool {
@@ -352,7 +479,15 @@ impl Table {
     }
 
     fn is_full(&self) -> bool {
-        self.header.next_free_block_index > self.max_block_index()
+        let next_free_index = self.header.next_free_node.block_index();
+        if next_free_index == usize::MAX {
+            return true;
+        }
+        if next_free_index > self.max_block_index() {
+            return true;
+        }
+
+        false
     }
 
     fn alloc_node(&mut self) -> Option<NodeHandle> {
@@ -365,74 +500,35 @@ impl Table {
     }
 
     unsafe fn alloc_node_unchecked(&mut self) -> Option<NodeHandle> {
-        let free_index = &mut self.header.next_free_block_index;
-        assert_ne!(*free_index, 0);
+        let next_free_node = &mut self.header.next_free_node;
+        let alloced_node = *next_free_node;
+        *next_free_node = next_free_node.next()?;
 
-        let node = NodeHandle {
-            // SAFETY: we just asserted that `free_index` is at least one.
-            block_index: unsafe { NonZeroU32::new_unchecked(*free_index) },
-        };
-        *free_index += 1;
-
-        Some(node)
-    }
-}
-
-impl Drop for Table {
-    fn drop(&mut self) {
-        // Let's try to flush the table a few times in case the first couple attempts fail.
-        for _ in 0..3 {
-            if self.flush().is_ok() {
-                return;
-            }
-        }
-        tracing::error!("failed to flush table");
-    }
-}
-
-impl<'a> HostEntry<'a> {
-    fn vacant(subnet_elem: &'a mut Option<NodeHandle>) -> Self {
-        Self::Vacant(VacantHostEntry { subnet_elem })
-    }
-}
-
-pub enum HostEntry<'a> {
-    Occupied(&'a mut Host),
-    Vacant(VacantHostEntry<'a>),
-}
-
-pub struct VacantHostEntry<'a> {
-    subnet_elem: &'a mut Option<NodeHandle>,
-}
-
-impl<'a> VacantHostEntry<'a> {
-    pub fn insert(self, _host: Host) -> &'a mut Host {
-        todo!()
+        Some(alloced_node)
     }
 }
 
 impl Header {
     fn new() -> Self {
         Self {
-            next_free_block_index: NodeHandle::first().block_index(),
-            root: Subnet::default(),
+            next_free_node: NodeHandle::first(),
+            reserved: [0; 1020],
         }
     }
 }
 
-#[repr(C, packed(4))]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+#[repr(C)]
+#[derive(Clone, Copy)]
 struct Header {
-    next_free_block_index: u32,
-    root: Subnet,
+    next_free_node: NodeHandle,
+    reserved: [u8; 1020],
 }
 
 impl NodeHandle {
     fn first() -> Self {
         Self {
-            // TODO: replace this with [`NonZeroU32::MIN`] when stabilised.
-            // SAFETY: 1 is nonzero.
-            block_index: unsafe { NonZeroU32::new_unchecked(1) },
+            // SAFETY: 2 is nonzero.
+            block_index: unsafe { NonZeroU32::new_unchecked(2) },
         }
     }
 }
@@ -465,53 +561,32 @@ impl NodeHandle {
         Some(Self { block_index: self.block_index.checked_add(1)? })
     }
 
-    fn block_index(self) -> u32 {
-        self.block_index.get()
+    fn block_index(self) -> usize {
+        self.block_index.get() as usize
     }
-
-    fn index(&self) -> u32 {
-        let block_index = self.block_index();
-        // SAFETY: `block_index` is at least one, so this cannot underflow.
-        let node_index = unsafe { block_index.unchecked_sub(1) };
-
-        node_index
-    }
-}
-
-// The `repr(u32)` forces the discriminant to be of type `u32`.
-#[repr(C, u32)]
-#[allow(unused)]
-enum Node {
-    Subnet(Subnet),
-    Host(Host),
 }
 
 impl Default for Subnet {
     fn default() -> Self {
-        Self([None; 255])
+        Self::new()
+    }
+}
+
+impl Subnet {
+    fn new() -> Self {
+        Self([None; 256])
     }
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy)]
-struct Subnet([Option<NodeHandle>; 255]);
-
-// SAFETY: `Subnet` is an array of POD and zeroable types. The reason we have to implement these
-// traits manually is because the corresponding derives do not support arrays with 255 elements (but
-// they work with 256).
-unsafe impl bytemuck::Pod for Subnet {}
-unsafe impl bytemuck::Zeroable for Subnet {}
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+struct Subnet([Option<NodeHandle>; 256]);
 
 impl Subnet {
     fn get_mut(&mut self, octet: u8) -> &mut Option<NodeHandle> {
-        if octet == 256 {
-            // TODO: I still haven't figured out how to handle 256.
-            todo!()
-        } else {
-            let index = usize::from(octet);
+        let index = usize::from(octet);
 
-            // SAFETY: accessing the array is bijective.
-            unsafe { self.0.get_unchecked_mut(index) }
-        }
+        // SAFETY: accessing the array is bijective.
+        unsafe { self.0.get_unchecked_mut(index) }
     }
 }

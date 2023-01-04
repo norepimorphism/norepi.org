@@ -11,7 +11,8 @@ use norepi_site_db_types::{Duration, PascalString, Timestamp};
 pub mod ipv4;
 pub mod ipv6;
 
-#[derive(Default)]
+#[repr(C)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone, Default)]
 pub struct Host {
     blocklist_entry: BlocklistEntry,
     offenses: HostOffenses,
@@ -72,13 +73,14 @@ impl Host {
     }
 }
 
-#[derive(Default)]
+#[repr(C)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone, Default)]
 pub struct BlocklistEntry {
     pub suspensions: Suspensions,
     pub ban: Option<Ban>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Copy, Clone, Default)]
 pub enum Suspensions {
     #[default]
     Zero,
@@ -175,7 +177,8 @@ impl Suspension {
     }
 }
 
-#[derive(Clone)]
+#[repr(C)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone)]
 pub struct Suspension {
     start: Timestamp,
     end: Timestamp,
@@ -209,6 +212,8 @@ impl Ban {
     }
 }
 
+#[repr(C)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
 pub struct Ban {
     start: Timestamp,
     comment: PascalString,
@@ -232,6 +237,8 @@ impl Default for HostOffenses {
 }
 
 bitflags! {
+    #[repr(C)]
+    #[derive(bytemuck::Pod, bytemuck::Zeroable)]
     pub struct HostOffenses: u32 {
         const ATTEMPTED_TO_ACCESS_ADMIN_PANEL = 1 << 0;
     }

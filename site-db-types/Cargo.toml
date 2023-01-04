@@ -7,6 +7,5 @@ edition = "2021"
 license = "MPL-2.0"
 
 [dependencies]
+bytemuck = { version = "1.12", features = ["derive"] }
 chrono = "0.4"
-serde = { version = "1.0", features = ["derive"] }
-serde-big-array = "0.4"
