@@ -440,19 +440,18 @@ pub enum HostEntry<'a> {
     Vacant(VacantHostEntry<'a>),
 }
 
-impl<'a> HostEntry<'a> {
-    fn vacant(subnet_elem: &'a mut Option<NodeHandle>) -> Self {
-        Self::Vacant(VacantHostEntry { subnet_elem })
-    }
+pub struct VacantHostEntry<'a> {
+    insert: Box<dyn 'a + FnOnce(Host) -> Result<&'a mut Host, InsertHostError>>,
 }
 
-pub struct VacantHostEntry<'a> {
-    subnet_elem: &'a mut Option<NodeHandle>,
+pub enum InsertHostError {
+    TooManyNodes,
+    OutOfSpace,
 }
 
 impl<'a> VacantHostEntry<'a> {
-    pub fn insert(self, host: Host) -> &'a mut Host {
-        todo!()
+    pub fn insert(self, host: Host) -> Result<&'a mut Host, InsertHostError> {
+        (self.insert)(host)
     }
 }
 
@@ -485,11 +484,10 @@ impl Table {
                             .get_node_mut(next_subnet_handle)
                             .ok_or(TableEntryError::OutOfSpace)?;
                         next_subnet.copy_from_slice(bytemuck::bytes_of(&Subnet::new()));
-                        let next_subnet: &mut Subnet = bytemuck::from_bytes_mut(next_subnet);
+                        current_subnet = bytemuck::from_bytes_mut(next_subnet);
 
                         entry.insert(next_subnet_handle);
-                        entry = next_subnet.get_mut(subnet_index);
-
+                        entry = current_subnet.get_mut(subnet_index);
                     }
                 }
             }
@@ -504,58 +502,34 @@ impl Table {
                     None => Err(TableEntryError::FollowedInvalidNodeHandle),
                 }
             }
-            elem @ None => Ok(HostEntry::vacant(elem)),
+            subnet_elem @ None => {
+                Ok(HostEntry::Vacant(VacantHostEntry {
+                    insert: Box::new(|host| {
+                        let host_handle = self
+                            .alloc_node()
+                            .ok_or(InsertHostError::TooManyNodes)?;
+                        let host_bytes = self.mmap
+                            .get_node_mut(host_handle)
+                            .ok_or(InsertHostError::OutOfSpace)?;
+                        host_bytes.copy_from_slice(bytemuck::bytes_of(&host));
+                        let host = bytemuck::from_bytes_mut(host_bytes);
+
+                        subnet_elem.insert(host_handle);
+
+                        Ok(host)
+                    }),
+                }))
+            }
         }
     }
 
-    fn contains_block(&self, index: usize) -> bool {
-        index <= self.max_block_index()
+    fn alloc_node(&mut self) -> Option<NodeHandle> {
+        self.header.alloc_node(self.max_block_index())
     }
 
     fn max_block_index(&self) -> usize {
         // SAFETY: `block_count` was guaranteed by [`BufferSize::from_mmap`] to be at least one.
         unsafe { self.block_count.unchecked_sub(1) }
-    }
-
-    fn is_full(&self) -> bool {
-        match NodeHandle::from_index(self.header.next_free_node) {
-            Some(next_free_node) => {
-                match next_free_node.block_index() {
-                    Some(block_index) => {
-                        block_index > self.max_block_index()
-                    }
-                    None => {
-                        // `next_free_node` is unrepresentable as a block index, so we cannot
-                        // continue.
-                        true
-                    }
-                }
-            }
-            // `next_free_node` is unrepresentable as a node handle, so we cannot continue.
-            None => true,
-        }
-    }
-
-    fn alloc_node(&mut self) -> Option<NodeHandle> {
-        if self.is_full() {
-            None
-        } else {
-            // SAFETY: we can contain at least one more node.
-            unsafe { self.alloc_node_unchecked() }
-        }
-    }
-
-    unsafe fn alloc_node_unchecked(&mut self) -> Option<NodeHandle> {
-        let next_free_node = &mut self.header.next_free_node;
-        // SAFETY: [`Table::is_full`] has guaranteed us that we can create a valid node handle from
-        // `next_free_node`.
-        let alloced_node = NodeHandle::from_index_unchecked(*next_free_node);
-        // SAFETY: `Table::is_full` has also guaranteed that we can increment `next_free_node`. This
-        // is actually the same guarantee as being able to soundly call
-        // [`NodeHandle::from_index_unchecked`].
-        *next_free_node = next_free_node.unchecked_add(1);
-
-        Some(alloced_node)
     }
 }
 
@@ -573,6 +547,48 @@ impl Header {
 struct Header {
     next_free_node: u32,
     reserved: [u8; 1020],
+}
+
+impl Header {
+    fn is_full(&self, max_block_index: usize) -> bool {
+        match NodeHandle::from_index(self.next_free_node) {
+            Some(next_free_node) => {
+                match next_free_node.block_index() {
+                    Some(block_index) => {
+                        block_index > max_block_index
+                    }
+                    None => {
+                        // `next_free_node` is unrepresentable as a block index, so we cannot
+                        // continue.
+                        true
+                    }
+                }
+            }
+            // `next_free_node` is unrepresentable as a node handle, so we cannot continue.
+            None => true,
+        }
+    }
+
+    fn alloc_node(&mut self, max_block_index: usize) -> Option<NodeHandle> {
+        if self.is_full(max_block_index) {
+            None
+        } else {
+            // SAFETY: we can contain at least one more node.
+            unsafe { self.alloc_node_unchecked() }
+        }
+    }
+
+    unsafe fn alloc_node_unchecked(&mut self) -> Option<NodeHandle> {
+        // SAFETY: [`Table::is_full`] has guaranteed us that we can create a valid node handle from
+        // `next_free_node`.
+        let alloced_node = NodeHandle::from_index_unchecked(self.next_free_node);
+        // SAFETY: `Table::is_full` has also guaranteed that we can increment `next_free_node`. This
+        // is actually the same guarantee as being able to soundly call
+        // [`NodeHandle::from_index_unchecked`].
+        self.next_free_node = self.next_free_node.unchecked_add(1);
+
+        Some(alloced_node)
+    }
 }
 
 // SAFETY: `Header` is a collection of POD types. The only reason we can't derive these traits is
