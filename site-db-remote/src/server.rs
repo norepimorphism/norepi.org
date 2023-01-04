@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{io::{self, Read as _}, path::Path};
+use std::{io::{self, Read as _}, net::Ipv4Addr, path::Path};
 
-use interprocess::local_socket::LocalSocketListener;
+use interprocess::local_socket::{LocalSocketListener, LocalSocketStream};
 use ipv4_table::Table;
 
-use crate::{Request, RequestIntent, Protocol};
+use crate::wire::{Action, Request, Protocol};
 
 mod ipv4_table;
 
@@ -32,12 +32,12 @@ pub enum StartError {
 impl Server {
     pub fn start(&mut self) -> Result<(), StartError> {
         let listener = LocalSocketListener::bind(crate::SOCKET_NAME).map_err(StartError::Bind)?;
-        for stream in listener.incoming().filter_map(Result::ok) {
-            let mut buf = [0; 2];
+        for mut stream in listener.incoming().filter_map(Result::ok) {
+            let mut buf = [0; Request::SIZE];
             if stream.read_exact(&mut buf).is_ok() {
                 match Request::decode(buf) {
                     Ok(req) => {
-                        self.handle_request(req);
+                        self.respond(&mut stream, req);
                     }
                     Err(e) => {
                         tracing::error!("{:#?}", e);
@@ -49,30 +49,27 @@ impl Server {
         Ok(())
     }
 
-    fn handle_request(&mut self, req: Request) {
-        let Request { proto, intent } = req;
+    fn respond(&mut self, stream: &mut LocalSocketStream, req: Request) {
+        let Request { proto, action, .. } = req;
 
-        match proto {
-            Protocol::Any => {
-                self.handle_ipv4_request(intent);
-                self.handle_ipv6_request(intent);
+        match (proto, action) {
+            (Protocol::Ipv4, Action::GetHost) => {
+                let mut buf = [0; 4];
+                // TODO: don't unwrap.
+                stream.read_exact(&mut buf).unwrap();
+
+                let ip = Ipv4Addr::new(buf[0], buf[1], buf[2], buf[3]);
+                // TODO: don't unwrap.
+                match self.ipv4.entry(ip).unwrap() {
+                    ipv4_table::HostEntry::Occupied(_host) => {
+                        todo!()
+                    }
+                    ipv4_table::HostEntry::Vacant(_) => {
+                        todo!()
+                    }
+                }
             }
-            Protocol::Ipv4 => {
-                self.handle_ipv4_request(intent);
-            }
-            Protocol::Ipv6 => {
-                self.handle_ipv6_request(intent);
-            }
+            _ => todo!(),
         }
-    }
-
-    fn handle_ipv4_request(&mut self, intent: RequestIntent) {
-        tracing::info!("IPV4 request");
-        // TODO
-    }
-
-    fn handle_ipv6_request(&mut self, intent: RequestIntent) {
-        tracing::info!("IPV6 request");
-        // TODO
     }
 }

@@ -429,6 +429,7 @@ impl Drop for Table {
     }
 }
 
+#[derive(Debug)]
 pub enum TableEntryError {
     FollowedInvalidNodeHandle,
     TooManyNodes,
