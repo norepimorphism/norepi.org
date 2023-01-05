@@ -499,7 +499,7 @@ impl Table {
         // This is necessary to allocate nodes, and we will use it later. We need to extract this
         // first before destructuring `self`.
         let max_block_index = self.max_block_index();
-        // Destructure `self` to avoid *borrowck* issues.
+        // Destructure `self`.
         let Self {
             header,
             top_level_subnet,
@@ -507,34 +507,45 @@ impl Table {
             ..
         } = self;
 
-        // This is our 'view' into `mmap`.
-        //
-        // We will constrain this view over time to avoid *borrowck* issues.
-        let mut mmap = mmap.as_mut();
-        // This is the current offset of the `mmap` view from the original `mmap`.
-        let mut mmap_offset = 0;
+        /// A 'view' of a memory-backed buffer.
+        ///
+        /// A view may be constrained over time to avoid *borrowck* issues.
+        struct MmapView<'a> {
+            /// The offset of the view from its originating buffer.
+            offset: usize,
+            /// The content of the view.
+            inner: &'a mut [u8],
+        }
 
-        macro_rules! get_view_mut {
-            ($view:ident @ $view_offset:ident [ $range:expr ]) => {{
-                let Range { mut start, mut end } = $range;
-                start -= $view_offset;
-                end -= $view_offset;
+        impl<'a> MmapView<'a> {
+            /// Creates a new view from the given memory-mapped buffer.
+            fn of(mmap: &'a mut MmapMut) -> Self {
+                Self { offset: 0, inner: mmap.as_mut() }
+            }
 
-                $view.get_mut(start..end)
-            }};
+            fn get_mut(&'a mut self, range: Range<usize>) -> Option<&'a mut [u8]> {
+                let Range { mut start, mut end } = range;
+                start -= self.offset;
+                end -= self.offset;
+
+                self.inner.get_mut(start..end)
+            }
         }
 
         /// Constrains a view to begin at the given byte offset.
         macro_rules! rebase_view {
+            ($view:ident -> $to:expr) => {{
+                // Note: if `to` is a function call, then we should save the result to a local
+                // variable and refer to that moving forward.
+                let to = $to;
 
-            ($view:ident @ $view_offset:ident -> $to:ident) => {
-                #[allow(unused_assignments)]
-                {
-                    $view_offset += $to;
-                    $view = &mut $view[$to..];
-                }
-            };
+                $view.offset += to;
+                $view.inner = &mut $view.inner[to..];
+            }};
         }
+
+        // This is our view of `mmap`. We will constrain it over time.
+        let mut mmap = MmapView::of(mmap);
 
         /// Creates a new [`Node`].
         ///
@@ -545,13 +556,9 @@ impl Table {
         /// The `?` operator is used to return errors if either [`Header::alloc_node`] or
         /// `get_node_mut` fail.
         macro_rules! create_node {
-            (
-                ($header:expr, $max_block_index:expr, $mmap:ident @ $mmap_offset:ident $(,)?)
-                    ? $error_ty:ty
-            ) => {{
+            (($header:expr, $max_block_index:expr, $mmap:ident $(,)?) ? $error_ty:ty) => {{
                 let handle = $header.alloc_node($max_block_index).ok_or(<$error_ty>::TooManyNodes)?;
-                let inner = get_node_mut!($mmap @ $mmap_offset [handle])
-                    .ok_or(<$error_ty>::OutOfSpace)?;
+                let inner = get_node_mut!($mmap [handle]).ok_or(<$error_ty>::OutOfSpace)?;
 
                 Node { handle, inner: bytemuck::from_bytes_mut(inner) }
             }};
@@ -563,25 +570,25 @@ impl Table {
         /// This macro is functionally identical to the [`BufferExt::get_node_mut`] method and only
         /// exists to ensure *borrowck* validates slice borrows correctly.
         macro_rules! get_node_mut {
-            ($mmap:ident @ $mmap_offset:ident [ $handle:expr ]) => {
+            ($mmap:ident [ $handle:expr ]) => {
                 match $handle.block_index() {
-                    Some(index) => get_view_mut!($mmap @ $mmap_offset [block_range(index)]),
+                    Some(index) => $mmap.get_mut(block_range(index)),
                     None => None,
                 }
             };
         }
 
         macro_rules! pop_node {
-            ($mmap:ident @ $mmap_offset:ident [ $handle:expr ]) => {
+            ($mmap:ident [ $handle:expr ]) => {
                 match $handle.block_index() {
                     Some(index) => {
                         let Range { start, end } = block_range(index);
                         // Constrain `mmap` so that we don't run into *borrowck* issues.
-                        rebase_view!($mmap @ $mmap_offset -> start);
+                        rebase_view!($mmap -> start);
 
-                        let result = get_view_mut!($mmap @ $mmap_offset [start..end]);
+                        let result = $mmap.get_mut(start..end);
                         // We can constrain it again now.
-                        rebase_view!($mmap @ $mmap_offset -> end);
+                        rebase_view!($mmap -> end);
 
                         result
                     }
@@ -613,7 +620,7 @@ impl Table {
             match current_subnet.get_mut(subnet_index) {
                 // It does.
                 &mut Some(node_handle) => {
-                    match pop_node!(mmap @ mmap_offset [node_handle]) {
+                    match pop_node!(mmap[node_handle]) {
                         // The subnet table contains a handle to another subnet table.
                         Some(subnet) => {
                             // Recurse to the next-level subnet table.
@@ -640,7 +647,7 @@ impl Table {
                         // Create a node for the new subnet table, returning from the outer function
                         // with an error if the allocation fails.
                         let Node { handle, inner: node }: Node<Subnet> = create_node!(
-                            (header, max_block_index, mmap @ mmap_offset) ? TableEntryError
+                            (header, max_block_index, mmap) ? TableEntryError
                         );
                         // Replace the `None` entry with `Some(handle)`.
                         entry.insert(handle);
@@ -663,7 +670,7 @@ impl Table {
 
         match host_table.get_mut(host_index) {
             &mut Some(node_handle) => {
-                match pop_node!(mmap @ mmap_offset [node_handle]) {
+                match pop_node!(mmap[node_handle]) {
                     Some(host) => {
                         Ok(HostEntry::Occupied(bytemuck::from_bytes_mut(host)))
                     }
@@ -673,7 +680,7 @@ impl Table {
             entry => {
                 Ok(HostEntry::vacant(move |host| {
                     let Node { handle, inner: node } = create_node!(
-                        (header, max_block_index, mmap @ mmap_offset) ? InsertHostError
+                        (header, max_block_index, mmap) ? InsertHostError
                     );
                     // Replace the `None` entry with `Some(handle)`.
                     entry.insert(handle);
