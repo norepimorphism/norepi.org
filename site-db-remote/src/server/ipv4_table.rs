@@ -58,20 +58,21 @@
 use std::{
     fs,
     io,
+    marker::PhantomData,
     mem,
     net::Ipv4Addr,
     num::NonZeroU32,
-    ops::Range,
     path::Path,
 };
 
-use memmap::{MmapMut, MmapOptions};
+use memmap2::{MmapMut, MmapOptions};
 use smallvec::SmallVec;
 
-use crate::Host;
-
 /// The size, in bytes, of a block.
-const BLOCK_SIZE: usize = 1024;
+pub const BLOCK_SIZE: usize = 1024;
+
+/// A block.
+pub type Block = [u8; BLOCK_SIZE];
 
 // Run [`check_layout`] at compile time.
 const _: () = check_layout();
@@ -113,6 +114,7 @@ fn usize_from_u32(value: u32) -> usize {
 }
 
 /// An error returned by [`open_file`].
+#[derive(Debug)]
 pub enum OpenFileError {
     /// The call to `File::open` failed.
     Open(io::Error),
@@ -123,6 +125,7 @@ pub enum OpenFileError {
 }
 
 /// An error contained in [`OpenFileError`].
+#[derive(Debug, PartialEq)]
 pub enum CreateTableError {
     /// The call to [`Table::new`] failed.
     New(NewTableError),
@@ -133,6 +136,8 @@ pub enum CreateTableError {
 /// Attempts to load a [table](`Table`) from the file at the given path, or creates a new table if
 /// the file doesn't exist.
 pub fn open_file(path: impl AsRef<Path>) -> Result<Table, OpenFileError> {
+    const NEW_FILE_SIZE: u64 = 10_000 * (BLOCK_SIZE as u64);
+
     let file = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -147,6 +152,10 @@ pub fn open_file(path: impl AsRef<Path>) -> Result<Table, OpenFileError> {
         // not new.
         Err(_) => false,
     };
+    if file_is_new {
+        let _ = file.set_len(NEW_FILE_SIZE);
+    }
+
     let mmap_opts = MmapOptions::new();
     // SAFETY: ???
     // FIXME: the *memmap* documentation provides no clues as to what invariants must be upheld for
@@ -162,6 +171,7 @@ pub fn open_file(path: impl AsRef<Path>) -> Result<Table, OpenFileError> {
 }
 
 /// An error returned by [`Table::new`].
+#[derive(Debug, PartialEq)]
 pub enum NewTableError {
     /// The buffer is too small to contain a valid table.
     ///
@@ -189,6 +199,7 @@ impl Table {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum LoadTableError {
     /// The buffer is too small to contain a valid table.
     ///
@@ -216,16 +227,12 @@ impl Table {
             mmap,
             |mmap| {
                 // SAFETY: [`with_mmap`] has guaranteed that the buffer contains a complete header.
-                let header = unsafe { mmap.get_header_unchecked() };
-
-                mem::copy(bytemuck::from_bytes(header))
+                mem::copy(unsafe { mmap.get_header_unchecked() })
             },
             |mmap| {
                 // SAFETY: [`with_mmap`] has guaranteed that the buffer contains a complete
                 // top-level subnet.
-                let subnet = unsafe { mmap.get_top_level_subnet_unchecked() };
-
-                mem::copy(bytemuck::from_bytes(subnet))
+                mem::copy(unsafe { mmap.get_top_level_subnet_unchecked() })
             },
             LoadTableError::BufferTooSmall,
         )
@@ -300,38 +307,30 @@ enum BufferSize {
     Blocks(usize),
 }
 
-trait Indexable {
-    fn translate_index(&self, index: usize) -> usize {
-        index
+trait AsBlocks {
+    fn as_blocks(&self) -> &[Block];
+
+    fn as_blocks_mut(&mut self) -> &mut [Block];
+}
+
+impl<T: AsRef<[u8]> + AsMut<[u8]>> AsBlocks for T {
+    fn as_blocks(&self) -> &[Block] {
+        self.as_ref().as_chunks::<BLOCK_SIZE>().0
     }
-}
 
-impl Indexable for MmapMut {}
-
-trait BlockIndexable {
-    fn block_range(&self, index: usize) -> Range<usize>;
-}
-
-impl<T: Indexable> BlockIndexable for T {
-    /// The range, in bytes, that a block with the given index inhabits.
-    fn block_range(&self, index: usize) -> Range<usize> {
-        let start = self.translate_index(BLOCK_SIZE * index);
-        let end = self.translate_index(BLOCK_SIZE * (index + 1));
-        let range = start..end;
-        assert_eq!(range.len(), BLOCK_SIZE);
-
-        range
+    fn as_blocks_mut(&mut self) -> &mut [Block] {
+        self.as_mut().as_chunks_mut::<BLOCK_SIZE>().0
     }
 }
 
 trait Buffer {
     /// Returns an immutable reference to the block with at the given index, or [`None`] if it
     /// doesn't exist.
-    fn get_block(&self, index: usize) -> Option<&[u8]>;
+    fn get_block(&self, index: usize) -> Option<&Block>;
 
     /// Returns a mutable reference to the block at the given index, or [`None`] if it doesn't
     /// exist.
-    fn get_block_mut(&mut self, index: usize) -> Option<&mut [u8]>;
+    fn get_block_mut(&mut self, index: usize) -> Option<&mut Block>;
 
     /// Returns an immutable reference to the block at the given index without first asserting that
     /// it exists.
@@ -339,7 +338,7 @@ trait Buffer {
     /// # Safety
     ///
     /// The underlying buffer must be large enough to accomodate the requested block.
-    unsafe fn get_block_unchecked(&self, index: usize) -> &[u8];
+    unsafe fn get_block_unchecked(&self, index: usize) -> &Block;
 
     /// Returns a mutable reference to the block at the given index without first asserting that it
     /// exists.
@@ -347,100 +346,95 @@ trait Buffer {
     /// # Safety
     ///
     /// The underlying buffer must be large enough to accomodate the requested block.
-    unsafe fn get_block_unchecked_mut(&mut self, index: usize) -> &mut [u8];
+    unsafe fn get_block_unchecked_mut(&mut self, index: usize) -> &mut Block;
 }
 
-impl<T: BlockIndexable + AsMut<[u8]> + AsRef<[u8]>> Buffer for T {
-    fn get_block(&self, index: usize) -> Option<&[u8]> {
-        self.as_ref().get(self.block_range(index))
+impl<T: AsBlocks> Buffer for T {
+    fn get_block(&self, index: usize) -> Option<&Block> {
+        self.as_blocks().get(index)
     }
 
-    fn get_block_mut(&mut self, index: usize) -> Option<&mut [u8]> {
-        let range = self.block_range(index);
-
-        self.as_mut().get_mut(range)
+    fn get_block_mut(&mut self, index: usize) -> Option<&mut Block> {
+        self.as_blocks_mut().get_mut(index)
     }
 
-    unsafe fn get_block_unchecked(&self, index: usize) -> &[u8] {
-        self.as_ref().get_unchecked(self.block_range(index))
+    unsafe fn get_block_unchecked(&self, index: usize) -> &Block {
+        self.as_blocks().get_unchecked(index)
     }
 
-    unsafe fn get_block_unchecked_mut(&mut self, index: usize) -> &mut [u8] {
-        let range = self.block_range(index);
-
-        self.as_mut().get_unchecked_mut(range)
+    unsafe fn get_block_unchecked_mut(&mut self, index: usize) -> &mut Block {
+        self.as_blocks_mut().get_unchecked_mut(index)
     }
 }
 
 trait BufferExt {
-    /// Returns an immutable reference to the block containing the table header without first
-    /// asserting that it exists.
+    /// Returns an immutable reference to the table header without first asserting that it exists.
     ///
     /// # Safety
     ///
     /// The underlying buffer must be large enough to accomodate the table header.
-    unsafe fn get_header_unchecked(&self) -> &[u8];
+    unsafe fn get_header_unchecked(&self) -> &Header;
 
-    /// Returns a mutable reference to the block containing the table header without first asserting
-    /// that it exists.
+    /// Returns a mutable reference to the table header without first asserting that it exists.
     ///
     /// # Safety
     ///
     /// The underlying buffer must be large enough to accomodate the table header.
-    unsafe fn get_header_unchecked_mut(&mut self) -> &mut [u8];
+    unsafe fn get_header_unchecked_mut(&mut self) -> &mut Header;
 
-    /// Returns an immutable reference to the block containing the top-level subnet table without
-    /// first asserting that it exists.
+    /// Returns an immutable reference to the top-level subnet table without first asserting that it
+    /// exists.
     ///
     /// # Safety
     ///
     /// The underlying buffer must be large enough to accomodate the top-level subnet.
-    unsafe fn get_top_level_subnet_unchecked(&self) -> &[u8];
+    unsafe fn get_top_level_subnet_unchecked(&self) -> &Subnet;
 
-    /// Returns a mutable reference to the block containing the top-level subnet table without first
-    /// asserting that it exists.
+    /// Returns a mutable reference to the top-level subnet table without first asserting that it
+    /// exists.
     ///
     /// # Safety
     ///
     /// The underlying buffer must be large enough to accomodate the top-level subnet.
-    unsafe fn get_top_level_subnet_unchecked_mut(&mut self) -> &mut [u8];
+    unsafe fn get_top_level_subnet_unchecked_mut(&mut self) -> &mut Subnet;
 
     /// Returns an immutable reference to the node with the given handle, or [`None`] if it doesn't
     /// exist.
-    fn get_node(&self, handle: NodeHandle) -> Option<&[u8]>;
+    fn get_node(&self, handle: NodeHandle) -> Option<&Block>;
 
     /// Returns a mutable reference to the node with the given handle, or [`None`] if it doesn't
     /// exist.
-    fn get_node_mut(&mut self, handle: NodeHandle) -> Option<&mut [u8]>;
+    fn get_node_mut(&mut self, handle: NodeHandle) -> Option<&mut Block>;
 }
 
 impl<T: Buffer> BufferExt for T {
-    unsafe fn get_header_unchecked(&self) -> &[u8] {
-        self.get_block_unchecked(0)
+    unsafe fn get_header_unchecked(&self) -> &Header {
+        bytemuck::from_bytes(self.get_block_unchecked(0))
     }
 
-    unsafe fn get_header_unchecked_mut(&mut self) -> &mut [u8] {
-        self.get_block_unchecked_mut(0)
+    unsafe fn get_header_unchecked_mut(&mut self) -> &mut Header {
+        bytemuck::from_bytes_mut(self.get_block_unchecked_mut(0))
     }
 
-    unsafe fn get_top_level_subnet_unchecked(&self) -> &[u8] {
-        self.get_block_unchecked(1)
+    unsafe fn get_top_level_subnet_unchecked(&self) -> &Subnet {
+        bytemuck::from_bytes(self.get_block_unchecked(1))
     }
 
-    unsafe fn get_top_level_subnet_unchecked_mut(&mut self) -> &mut [u8] {
-        self.get_block_unchecked_mut(1)
+    unsafe fn get_top_level_subnet_unchecked_mut(&mut self) -> &mut Subnet {
+        bytemuck::from_bytes_mut(self.get_block_unchecked_mut(1))
     }
 
-    fn get_node(&self, handle: NodeHandle) -> Option<&[u8]> {
+    fn get_node(&self, handle: NodeHandle) -> Option<&Block> {
         self.get_block(handle.block_index()?)
     }
 
-    fn get_node_mut(&mut self, handle: NodeHandle) -> Option<&mut [u8]> {
+    fn get_node_mut(&mut self, handle: NodeHandle) -> Option<&mut Block> {
         self.get_block_mut(handle.block_index()?)
     }
 }
 
 /// A stupid-simple IPv4 table.
+#[derive(Debug)]
 pub struct Table {
     header: Header,
     top_level_subnet: Subnet,
@@ -454,19 +448,15 @@ impl Table {
     /// This function is automatically called when a `Table` is [dropped](`Drop`), but you can call
     /// it more often if you like.
     pub fn flush(&mut self) -> io::Result<()> {
-        let header = bytemuck::bytes_of(&self.header);
         // Write our copy of the header to the buffer.
         // SAFETY: [`with_mmap`] guaranteed that the buffer contains a complete header.
-        unsafe { self.mmap.get_header_unchecked_mut() }.copy_from_slice(header);
-
-        let top_level_subnet = bytemuck::bytes_of(&self.top_level_subnet);
+        *unsafe { self.mmap.get_header_unchecked_mut() } = self.header;
         // Write our copy of the top-level subnet to the buffer.
         // SAFETY: `with_mmap` also guaranteed that the buffer contains a complete top-level subnet.
-        unsafe { self.mmap.get_top_level_subnet_unchecked_mut() }
-            .copy_from_slice(top_level_subnet);
+        *unsafe { self.mmap.get_top_level_subnet_unchecked_mut() } = self.top_level_subnet;
 
         // Finally, flush everything to disk.
-        // TODO: should we take a more granular approach to flushing?
+        // FIXME: should we take a more granular approach to flushing?
         self.mmap.flush()
     }
 }
@@ -487,12 +477,10 @@ impl Drop for Table {
 #[derive(Debug)]
 pub enum TableEntryError {
     FollowedInvalidNodeHandle,
-    TooManyNodes,
-    OutOfSpace,
 }
 
 pub enum HostEntry<'a> {
-    Occupied(&'a mut Host),
+    Occupied(&'a mut Block),
     Vacant(VacantHostEntry<'a>),
 }
 
@@ -503,9 +491,11 @@ impl Table {
         // references to `self`, nor can we hold multiple exclusive references to the memory-backed
         // buffer in which all table blocks are contained. We must therefore be very careful in how
         // we borrow.
-
-        // The first workaround is to call all necessary methods on `Self` and then destructure
-        // `self` to ensure we cannot hold multiple exclusive references to it.
+        //
+        // The first trick is to call all necessary methods on `Self` and then destructure `self` to
+        // ensure we cannot hold multiple exclusive references to it.
+        //
+        // The second trick is an egregious amount of `unsafe`, which we will observe shortly.
 
         // This is necessary to allocate nodes, and we will use it later. We need to extract this
         // first before destructuring `self`.
@@ -517,72 +507,6 @@ impl Table {
             mmap,
             ..
         } = self;
-
-        // The second workaround is 'borrow-splitting', which is described for slices in [the
-        // relevant Nomicon article]. In truth, we *can* hold multiple exclusive references to the
-        // memory-backed buffer if they refer to different slices. We do this by breaking `mmap`
-        // into smaller slices with `split_at_mut`. But, for [`NodeHandles`] to properly index these
-        // smaller, offseted slices, we must maintain an 'offset counter' that tracks how far a
-        // slice is from the beginning of `mmap`. The [`MmapView`] type contains both this offset
-        // and the slice.
-        //
-        // [the relevant Nomicon article]: https://doc.rust-lang.org/nomicon/borrow-splitting.html
-
-        /// A 'view' of a memory-backed buffer.
-        struct MmapView<'a> {
-            /// The offset of this view from the original `mmap` variable.
-            offset: usize,
-            /// The content of the view.
-            inner: &'a mut [u8],
-        }
-
-        // Implementing these three traits gives us [`BlockIndexable`], [`Buffer`], and
-        // [`BufferExt`] for free.
-
-        impl Indexable for MmapView<'_> {
-            fn translate_index(&self, index: usize) -> usize {
-                index - self.offset
-            }
-        }
-        impl AsRef<[u8]> for MmapView<'_> {
-            fn as_ref(&self) -> &[u8] {
-                self.inner
-            }
-        }
-        impl AsMut<[u8]> for MmapView<'_> {
-            fn as_mut(&mut self) -> &mut [u8] {
-                self.inner
-            }
-        }
-
-        impl<'a> MmapView<'a> {
-            /// Creates a new view from the entirety of the given slice.
-            fn of(inner: &'a mut [u8]) -> Self {
-                Self { offset: 0, inner }
-            }
-
-            /// Splits this view into two smaller views, where the left view is before the given
-            /// block index and the right view is after.
-            fn split_at_block_start(self, block_index: usize) -> (Self, Self) {
-                let Range { start, .. } = self.block_range(block_index);
-
-                self.split_at(start)
-            }
-
-            /// Splits this view into two smaller views.
-            fn split_at(self, mid: usize) -> (Self, Self) {
-                let Self { offset, inner } = self;
-                let (left, right) = inner.split_at_mut(mid);
-
-                (
-                    Self { offset, inner: left },
-                    Self { offset: offset + mid, inner: right },
-                )
-            }
-        }
-
-        // This is our original view of `mmap`.
-        let mmap_view = MmapView::of(mmap.as_mut());
 
         // `subnet_indices` is an iterator over the first three octets of the IP address, and
         // `host_index` is the last octet of the IP address. Both are used to index subnet tables,
@@ -601,134 +525,79 @@ impl Table {
         // The first iteration over `subnet_indices` uses `top_level_subnet`, and following
         // iterations reference subnet tables from the buffer.
         let mut current_subnet = top_level_subnet;
-        // This is the view from which `current_subnet` is borrowed.
-        //
-        // To begin, this variable is uninitialised because `current_subnet` does not yet borrow
-        // from the buffer.
-        let mut current_subnet_view: MmapView;
 
-        /// Splits off a view at the given node handle, returning a mutable reference to the node if
-        /// it exists, or `None` otherwise.
-        ///
-        /// In the `Some(_)` case, the original view is reassigned to the right side of the split,
-        /// excluding the node itself, and a new view is assigned to the left side of the split that
-        /// contains the node.
-        ///
-        /// The original view is not modified if `None` is returned.
-        ///
-        /// # Arguments
-        ///
-        /// `$handle` is the node handle. `$from` is the original view, and `$to` is the new view
-        /// containing the resultant node.
-        macro_rules! pop_node {
-            ($to:ident [ $handle:expr ] $from:ident) => {
-                match $handle.block_index() {
-                    Some(block_index) => {
-                        let Range { start, end } = $from.block_range(block_index);
-                        #[allow(unused_assignments)]
-                        {
-                            ($to, $from) = $from.split_at(end);
+        while let Some(subnet_index) = subnet_indices.next() {
+            // Let's see if this subnet table contains an entry for this octet.
+            match current_subnet.get_mut(subnet_index) {
+                // It does. This entry should represent another subnet table.
+                &mut Some(next_subnet_handle) => {
+                    // Next, we will attempt to obtain a reference to this next subnet table.
+
+                    // We don't need this anymore.
+                    drop(current_subnet);
+
+                    match mmap.get_node_mut(next_subnet_handle) {
+                        Some(subnet) => {
+                            // Recurse to the next-level subnet table.
+                            current_subnet = bytemuck::from_bytes_mut(subnet);
+                            continue;
                         }
-
-                        $to.as_mut().get_mut(start..)
-
+                        // The handle pointed to a subnet that does not exist.
+                        None => {
+                            return Err(TableEntryError::FollowedInvalidNodeHandle);
+                        }
                     }
-                    None => None,
                 }
-            };
+                // It does not contain an entry for this octet. We can assume that the host entry is
+                // vacant.
+                entry => {
+                    // We will now constuct a [`HostEntry::vacant`], but there is one problem:
+                    // we would like to pass `header`, `entry`, and `mmap` to the `HostEntry` by
+                    // reference, but doing do would violate borrowing rules. But, no worries, as
+                    // we can pass them by pointers and figure out the borrowing stuff later.
+                    return Ok(HostEntry::Vacant(VacantHostEntry {
+                        insert_strategy: InsertHostStrategy::InsertSubnetsAndHost {
+                            header: header as *mut Header,
+                            max_block_index,
+                            // Collect these into an inlined [`SmallVec`].
+                            subnet_indices: subnet_indices.collect(),
+                            // Note: the object referenced by `entry` will not die when this
+                            // function ends because the memory will still exist in `mmap`.
+                            first_subnet_entry: entry as *mut Option<NodeHandle>,
+                            mmap: mmap as *mut MmapMut,
+                        },
+                        _phantom: PhantomData,
+                    }));
+                }
+            }
         }
 
-        // Can I has new nods?
-        if let TableUsage::NotFull { next_free_block } = header.usage(max_block_index) {
-            // Yes, and `next_free_block` points to the first unallocated block.
-            let (
-                mut occupied_blocks,
-                mut free_blocks,
-            ) = mmap_view.split_at_block_start(next_free_block);
+        // At this point, `current_subnet` should contain host entries and not links to other
+        // tables. We will rename it to reflect this.
+        let host_table = current_subnet;
 
-            while let Some(subnet_index) = subnet_indices.next() {
-                // Let's see if this subnet table contains an entry for this octet.
-                match current_subnet.get_mut(subnet_index) {
-                    // It does. This entry should represent another subnet table.
-                    &mut Some(next_subnet_handle) => {
-                        // Next, we will attempt to obtain a reference to this next subnet table.
-                        match pop_node!(current_subnet_view [next_subnet_handle] occupied_blocks) {
-                            // `occupied_blocks` is now constained to all blocks after `subnet`, and
-                            // `subnet` itself is borrowed from `current_subnet_view`.
-                            Some(subnet) => {
-                                // Recurse to the next-level subnet table.
-                                //
-                                // Note: `current_subnet` now borrows from `current_subnet_view`.
-                                current_subnet = bytemuck::from_bytes_mut(subnet);
-                                continue;
-                            }
-                            // The handle pointed to a subnet that does not exist.
-                            None => {
-                                // This is a hard error, and we cannot continue.
-                                return Err(TableEntryError::FollowedInvalidNodeHandle);
-                            }
-                        }
+        match host_table.get_mut(host_index) {
+            &mut Some(host_handle) => {
+                match mmap.get_node_mut(host_handle) {
+                    Some(host) => {
+                        Ok(HostEntry::Occupied(host))
                     }
-                    // It does not. We can assume that the host entry is vacant.
-                    entry => {
-                        // We will now constuct a [`HostEntry::vacant`], but there is one problem:
-                        // `entry` borrows from `current_subnet`, and moving both would create a
-                        // self-referential type. To avoid this, we will attempt to re-borrow
-                        // `entry` from `self` instead.
-
-                        let entry: *mut Option<NodeHandle> = entry as *mut _;
-                        // We are careful to drop any variables that might alias `entry`.
-
-                        // Note: dropping `occupied_blocks` will also drop `current_subnet` and
-                        // `current_subnet_view`.
-                        drop(occupied_blocks);
-                        // Note: `header` currently borrows from `self`, so we need to copy it.
-                        let header = mem::copy(header);
-
-                        // SAFETY:
-                        // - `entry` is not null.
-                        // - `entry` should be properly aligned after [`bytemuck::from_bytes`].
-                        // - `entry` is entirely within the bounds of a single allocated
-                        //   object. It is borrwed directly from `self`.
-                        // - `entry` is not aliased by any other variable.
-                        let entry = unsafe { &mut *entry };
-
-                        return Ok(HostEntry::Vacant(VacantHostEntry {
-                            insert_strategy: InsertHostStrategy::InsertSubnetsAndHost {
-                                header,
-                                max_block_index,
-                                // Collect these into an inlined [`SmallVec`].
-                                subnet_indices: subnet_indices.collect(),
-                                first_subnet_entry: entry,
-                            },
-                        }));
-                    }
+                    None => Err(TableEntryError::FollowedInvalidNodeHandle),
                 }
             }
-
-            // At this point, `current_subnet` should contain host entries and not links to other
-            // tables. We will rename it to reflect this.
-            let host_table = current_subnet;
-
-            match host_table.get_mut(host_index) {
-                &mut Some(host_handle) => {
-                    match occupied_blocks.get_node_mut(host_handle) {
-                        Some(block_index) => {
-                            let MmapView { inner, .. } = occupied_blocks;
-
-                            Ok(HostEntry::Occupied(bytemuck::from_bytes_mut(inner)))
-                        }
-                        None => Err(TableEntryError::FollowedInvalidNodeHandle),
-                    }
-                }
-                entry => {
-                    todo!()
-                }
+            entry => {
+                Ok(HostEntry::Vacant(VacantHostEntry {
+                    insert_strategy: InsertHostStrategy::InsertHostOnly {
+                        header: header as *mut Header,
+                        max_block_index,
+                        // Note: the object referenced by `entry` will not die when this
+                        // function ends because the memory will still exist in `mmap`.
+                        host_table_entry: entry as *mut Option<NodeHandle>,
+                        mmap: mmap as *mut MmapMut,
+                    },
+                    _phantom: PhantomData,
+                }))
             }
-        } else {
-            tracing::warn!("table is full");
-
-            todo!()
         }
     }
 
@@ -739,110 +608,139 @@ impl Table {
 }
 
 pub struct VacantHostEntry<'a> {
-    insert_strategy: InsertHostStrategy<'a>,
+    insert_strategy: InsertHostStrategy,
+    _phantom: PhantomData<&'a ()>,
 }
 
-enum InsertHostStrategy<'a> {
+enum InsertHostStrategy {
     InsertSubnetsAndHost {
-        header: Header,
+        header: *mut Header,
         max_block_index: usize,
         subnet_indices: SmallVec<[u8; 3]>,
-        first_subnet_entry: &'a mut Option<NodeHandle>,
+        first_subnet_entry: *mut Option<NodeHandle>,
+        mmap: *mut MmapMut,
     },
-    InsertHostOnly,
+    InsertHostOnly {
+        header: *mut Header,
+        max_block_index: usize,
+        host_table_entry: *mut Option<NodeHandle>,
+        mmap: *mut MmapMut,
+    },
 }
 
-type InsertHostResult<'a> = Result<&'a mut Host, InsertHostError>;
+type InsertHostResult<'a> = Result<&'a mut Block, InsertHostError>;
 
+#[derive(Debug)]
 pub enum InsertHostError {
     TooManyNodes,
     OutOfSpace,
 }
 
 impl<'a> VacantHostEntry<'a> {
-    pub fn insert(self, host: Host) -> InsertHostResult<'a> {
+    pub fn insert(self, new_host: Block) -> InsertHostResult<'a> {
         match self.insert_strategy {
             InsertHostStrategy::InsertSubnetsAndHost {
                 header,
                 max_block_index,
                 subnet_indices,
                 first_subnet_entry,
+                mmap,
             } => {
                 Self::insert_subnets_and_host(
                     header,
                     max_block_index,
                     subnet_indices,
                     first_subnet_entry,
-                    host,
+                    mmap,
+                    new_host,
                 )
             }
-            InsertHostStrategy::InsertHostOnly => {
-                Self::insert_host_only()
+            InsertHostStrategy::InsertHostOnly {
+                header,
+                max_block_index,
+                host_table_entry,
+                mmap,
+            } => {
+                Self::insert_host_only(header, max_block_index, host_table_entry, mmap, new_host)
             }
         }
     }
 
     fn insert_subnets_and_host(
-        mut header: Header,
+        header: *mut Header,
         max_block_index: usize,
         subnet_indices: impl IntoIterator<Item = u8>,
-        first_subnet_entry: &'a mut Option<NodeHandle>,
-        host: Host,
+        first_subnet_entry: *mut Option<NodeHandle>,
+        mmap: *mut MmapMut,
+        new_host: Block,
     ) -> InsertHostResult<'a> {
-        let entry = first_subnet_entry;
+        let mut current_subnet_entry = first_subnet_entry;
 
         // On insertion, we need to generate new subnet tables for the remaining
         // octets.
         for next_subnet_index in subnet_indices {
             // Allocate a handle for the next subnet table.
-            let handle = header
+            // SAFETY: no other variables were aliasing `header`, and we immediately discarded the
+            // reference to avoid aliasing down the road.
+            let handle = unsafe { &mut *header }
                 .alloc_node(max_block_index)
                 .ok_or(InsertHostError::TooManyNodes)?;
-            // Replace the `None` entry in the current subnet table with a
-            // `Some(handle)` to the next table.
-            *entry = Some(handle);
-            // `entry` might borrow from `current_subnet_view`, which is a
-            // problem because we're about to reassign it. But, that's okay,
-            // because we don't need this `entry` anymore.
-            drop(entry);
+            // Replace the `None` entry in the current subnet table with a `Some(handle)` to the
+            // next table.
+            // SAFETY: no other variables were aliasing `current_subnet_entry`, and we immediately
+            // discarded the reference.
+            unsafe { *current_subnet_entry = Some(handle) };
 
             // Obtain a reference to this new subnet table.
-            let current_subnet: &mut Subnet = /*pop_node!(current_subnet_view [handle] free_blocks)
+            // SAFETY: no other variables were aliasing `mmap`. Note that `current_subnet` is now
+            // borrowing from `mmap`, but that's okay for now.
+            let current_subnet = unsafe { &mut *mmap }
+                .get_node_mut(handle)
                 .ok_or(InsertHostError::OutOfSpace)
-                .map(bytemuck::from_bytes_mut)?;*/todo!();
+                .map(|node| bytemuck::from_bytes_mut(node))?;
             // Initialize the new table.
             *current_subnet = Subnet::new();
 
             // Our next entry to fix is `current_subnet[next_subnet_index]`.
-            entry = current_subnet.get_mut(next_subnet_index);
+            current_subnet_entry = current_subnet.get_mut(next_subnet_index) as *mut _;
+            // Note: `current_subnet` gets dropped here.
         }
 
-        let handle = header
+        Self::insert_host_only(header, max_block_index, current_subnet_entry, mmap, new_host)
+    }
+
+    fn insert_host_only(
+        header: *mut Header,
+        max_block_index: usize,
+        host_table_entry: *mut Option<NodeHandle>,
+        mmap: *mut MmapMut,
+        new_host: Block,
+    ) -> InsertHostResult<'a> {
+        // SAFETY: no other variables were aliasing `header`, and we immediately discarded the
+        // reference.
+        let handle = unsafe { &mut *header }
             .alloc_node(max_block_index)
             .ok_or(InsertHostError::TooManyNodes)?;
         // Replace the `None` entry with `Some(handle)`.
-        *entry = Some(handle);
-        drop(entry);
+        // SAFETY: no other variables were aliasing `host_table_entry`, and we immediately discarded
+        // the reference.
+        unsafe { *host_table_entry = Some(handle); }
 
-        let node: &mut Host = /*mmap
+        // SAFETY: no other variables were aliasing `mmap`. Note that `host` is now borrowing from
+        // `mmap`, but that's okay because this is the last of the unsafety.
+        let host: &mut Block = unsafe { &mut *mmap }
             .get_node_mut(handle)
-            .ok_or(InsertHostError::OutOfSpace)
-            .map(bytemuck::from_bytes_mut)?;*/todo!();
-
+            .ok_or(InsertHostError::OutOfSpace)?;
         // Initialize the new host record.
-        *node = host;
+        *host = new_host;
 
-        Ok(node)
-    }
-
-    fn insert_host_only() -> InsertHostResult<'a> {
-        todo!()
+        Ok(host)
     }
 }
 
 /// A handle to a node.
 #[repr(transparent)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct NodeHandle {
     // The only reason this type is [`NonZeroU32`] is because it exploits the Nullable Pointer
     // Optimization. There is no semantic significance to zero being unrepresentable. Also, this
@@ -912,10 +810,25 @@ impl Header {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Header {
     next_free_node: u32,
     reserved: [u8; 1020],
+}
+
+impl Header {
+    fn alloc_node(&mut self, max_block_index: usize) -> Option<NodeHandle> {
+        if self.is_full(max_block_index) {
+            None
+        } else {
+            // SAFETY: we can contain at least one more node.
+            unsafe { self.alloc_node_unchecked() }
+        }
+    }
+
+    fn is_full(&self, max_block_index: usize) -> bool {
+        matches!(self.usage(max_block_index), TableUsage::Full)
+    }
 }
 
 enum TableUsage {
@@ -926,10 +839,6 @@ enum TableUsage {
 }
 
 impl Header {
-    fn is_full(&self, max_block_index: usize) -> bool {
-        matches!(self.usage(max_block_index), TableUsage::Full)
-    }
-
     fn usage(&self, max_block_index: usize) -> TableUsage {
         match NodeHandle::from_index(self.next_free_node) {
             Some(next_free_node) => {
@@ -950,15 +859,6 @@ impl Header {
             }
             // `next_free_node` is unrepresentable as a node handle, so we cannot continue.
             None => TableUsage::Full,
-        }
-    }
-
-    fn alloc_node(&mut self, max_block_index: usize) -> Option<NodeHandle> {
-        if self.is_full(max_block_index) {
-            None
-        } else {
-            // SAFETY: we can contain at least one more node.
-            unsafe { self.alloc_node_unchecked() }
         }
     }
 
@@ -993,7 +893,7 @@ impl Subnet {
 }
 
 #[repr(transparent)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy, Debug, PartialEq)]
 struct Subnet([Option<NodeHandle>; 256]);
 
 impl Subnet {

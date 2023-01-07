@@ -2,10 +2,10 @@
 
 //! Known remote hosts.
 
-#![feature(mem_copy_fn, nonzero_min_max, unchecked_math)]
+#![feature(generic_const_exprs, mem_copy_fn, nonzero_min_max, slice_as_chunks, unchecked_math)]
 
-// use bitflags::bitflags;
-// use norepi_site_db_types::{Duration, PascalString, Timestamp};
+use bitflags::bitflags;
+use norepi_site_db_types::{Duration, Timestamp};
 
 pub use server::Server;
 
@@ -16,15 +16,18 @@ mod wire;
 
 static SOCKET_NAME: &str = "site-db-remote";
 
-#[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone)]
-pub struct Host {/*
-    blocklist_entry: BlocklistEntry,
-    offenses: HostOffenses,*/
-    reserved: [u8; 1024],
+impl Host {
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
-/*
+#[derive(serde::Deserialize, serde::Serialize, Debug, Default)]
+pub struct Host {
+    blocklist_entry: BlocklistEntry,
+    offenses: HostOffenses,
+}
+
 impl Host {
     pub fn is_blocked(&self) -> bool {
         self.is_banned() || self.is_suspended()
@@ -43,6 +46,7 @@ impl Host {
     }
 }
 
+#[derive(Debug)]
 pub enum SuspendHostError {
     AlreadyBlocked,
     FailedToPush(PushSuspensionError),
@@ -60,6 +64,7 @@ impl Host {
     }
 }
 
+#[derive(Debug)]
 pub enum BanHostError {
     AlreadyBlocked,
 }
@@ -80,14 +85,13 @@ impl Host {
     }
 }
 
-#[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone, Default)]
+#[derive(serde::Deserialize, serde::Serialize, Debug, Default)]
 pub struct BlocklistEntry {
     pub suspensions: Suspensions,
     pub ban: Option<Ban>,
 }
 
-#[derive(Copy, Clone, Default)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, Default)]
 pub enum Suspensions {
     #[default]
     Zero,
@@ -160,6 +164,7 @@ impl Suspensions {
     }
 }
 
+#[derive(Debug)]
 pub enum PushSuspensionError {
     Full,
 }
@@ -179,17 +184,16 @@ impl Suspension {
         Self {
             end: now + duration,
             start: now,
-            comment: PascalString::new(),
+            comment: String::new(),
         }
     }
 }
 
-#[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct Suspension {
     start: Timestamp,
     end: Timestamp,
-    comment: PascalString,
+    comment: String,
 }
 
 impl Suspension {
@@ -201,8 +205,8 @@ impl Suspension {
         self.end
     }
 
-    pub fn comment(&self) -> &PascalString {
-        &self.comment
+    pub fn comment(&self) -> &str {
+        self.comment.as_str()
     }
 
     pub fn is_active(&self) -> bool {
@@ -214,16 +218,15 @@ impl Ban {
     pub fn now() -> Self {
         Self {
             start: Timestamp::now(),
-            comment: PascalString::new(),
+            comment: String::new(),
         }
     }
 }
 
-#[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
 pub struct Ban {
     start: Timestamp,
-    comment: PascalString,
+    comment: String,
 }
 
 impl Ban {
@@ -231,8 +234,8 @@ impl Ban {
         self.start
     }
 
-    pub fn comment(&self) -> &PascalString {
-        &self.comment
+    pub fn comment(&self) -> &str {
+        self.comment.as_str()
     }
 }
 
@@ -244,10 +247,8 @@ impl Default for HostOffenses {
 }
 
 bitflags! {
-    #[repr(C)]
-    #[derive(bytemuck::Pod, bytemuck::Zeroable)]
+    #[derive(serde::Deserialize, serde::Serialize)]
     pub struct HostOffenses: u32 {
         const ATTEMPTED_TO_ACCESS_ADMIN_PANEL = 1 << 0;
     }
 }
-*/

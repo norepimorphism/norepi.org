@@ -2,7 +2,7 @@
 
 //! Custom data types for use in a database.
 
-use std::{fmt, ops::Add};
+use std::ops::Add;
 
 pub type UtcDateTime = chrono::DateTime<chrono::Utc>;
 
@@ -41,7 +41,7 @@ impl From<UtcDateTime> for Timestamp {
 }
 
 #[repr(transparent)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug)]
 pub struct Timestamp(i64);
 
 impl Timestamp {
@@ -73,62 +73,5 @@ impl From<Timestamp> for UtcDateTime {
         let datetime = chrono::NaiveDateTime::from_timestamp_opt(timestamp.0, 0).unwrap();
 
         chrono::DateTime::from_utc(datetime, chrono::offset::Utc)
-    }
-}
-
-impl Default for PascalString {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PascalString {
-    const CAPACITY: usize = 64 - std::mem::align_of::<u8>();
-
-    /// Creates an empty string.
-    pub fn new() -> Self {
-        Self {
-            len: 0,
-            content: [0; Self::CAPACITY],
-        }
-    }
-}
-
-/// A length-prefixed, fixed-capacity ASCII string for use in databases.
-#[repr(C, packed)]
-#[derive(Copy, Clone)]
-pub struct PascalString {
-    len: u8,
-    content: [u8; Self::CAPACITY],
-}
-
-// SAFETY: TODO
-unsafe impl bytemuck::Pod for PascalString {}
-unsafe impl bytemuck::Zeroable for PascalString {}
-
-impl fmt::Display for PascalString {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(String::from_utf8_lossy(self.as_bytes()).as_ref())
-    }
-}
-
-impl PascalString {
-    /// Determines if the length of this string is zero.
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    /// The length, in ASCII characters, of this string.
-    pub fn len(&self) -> u8 {
-        self.len
-    }
-
-    /// An immutable reference to the content of this string.
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.content[..usize::from(self.len)]
-    }
-
-    pub fn as_str(&self) -> Result<&str, std::str::Utf8Error> {
-        std::str::from_utf8(self.as_bytes())
     }
 }

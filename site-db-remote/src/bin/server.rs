@@ -2,5 +2,5 @@
 
 fn main() {
     let mut server = norepi_site_db_remote::Server::open("ipv4.db").unwrap();
-    server.start().unwrap();
+    server.serve().unwrap();
 }
