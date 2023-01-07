@@ -564,7 +564,7 @@ impl Table {
                             header: header as *mut Header,
                             max_block_index,
                             // Collect these into an inlined [`SmallVec`].
-                            subnet_indices: subnet_indices.collect(),
+                            subnet_indices: subnet_indices.chain(std::iter::once(host_index)).collect(),
                             // Note: the object referenced by `entry` will not die when this
                             // function ends because the memory will still exist in `mmap`.
                             first_subnet_entry: entry as *mut Option<NodeHandle>,
@@ -620,7 +620,7 @@ enum InsertHostStrategy {
     InsertSubnetsAndHost {
         header: *mut Header,
         max_block_index: usize,
-        subnet_indices: SmallVec<[u8; 3]>,
+        subnet_indices: SmallVec<[u8; 4]>,
         first_subnet_entry: *mut Option<NodeHandle>,
         mmap: *mut MmapMut,
     },
@@ -673,7 +673,7 @@ impl<'a> VacantHostEntry<'a> {
     fn insert_subnets_and_host(
         header: *mut Header,
         max_block_index: usize,
-        subnet_indices: SmallVec<[u8; 3]>,
+        subnet_indices: SmallVec<[u8; 4]>,
         first_subnet_entry: *mut Option<NodeHandle>,
         mmap: *mut MmapMut,
         new_host: Block,
