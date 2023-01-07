@@ -4,18 +4,35 @@ use std::{future::Future, process};
 
 pub mod bind;
 
-pub async fn run<E, O>(serve: impl Fn() -> O) -> process::ExitCode
+pub fn run<E>(serve: impl Fn() -> Result<(), E>) -> process::ExitCode
+where
+    E: std::error::Error,
+{
+    prologue();
+
+    handle_serve(serve())
+}
+
+pub async fn run_async<E, O>(serve: impl Fn() -> O) -> process::ExitCode
 where
     E: std::error::Error,
     O: Future<Output = Result<(), E>>,
 {
+    prologue();
+
+    handle_serve(serve().await)
+}
+
+fn prologue() {
     if let Err(e) = try_setup_tracing() {
         eprintln!("Failed to setup tracing: {}", e);
     }
 
     tracing::info!("{} v{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+}
 
-    if let Err(e) = serve().await {
+fn handle_serve<E: std::error::Error>(result: Result<(), E>) -> process::ExitCode {
+    if let Err(e) = result {
         tracing::error!("{}", e);
 
         process::ExitCode::FAILURE

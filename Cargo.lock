@@ -847,6 +847,7 @@ dependencies = [
  "interprocess",
  "memmap2",
  "norepi-site-db-types",
+ "norepi-site-util",
  "serde",
  "smallvec",
  "tracing",
