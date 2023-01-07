@@ -261,6 +261,8 @@ impl Table {
         match BufferSize::from_mmap(&mmap) {
             BufferSize::TooSmall => Err(too_small_error),
             BufferSize::Blocks(block_count) => {
+                tracing::info!("block_count: {}", block_count);
+
                 Ok(Self {
                     header: get_header(&mmap),
                     top_level_subnet: get_top_level_subnet(&mmap),
@@ -486,6 +488,8 @@ pub enum HostEntry<'a> {
 
 impl Table {
     pub fn entry<'a>(&'a mut self, addr: Ipv4Addr) -> Result<HostEntry<'a>, TableEntryError> {
+        tracing::debug!("addr: {}", addr);
+
         // Foreword: The implementation of this method is fairly complicated due to constraints
         // imposed by the borrow-checker, *borrowck*. Namely, we cannot hold multiple exclusive
         // references to `self`, nor can we hold multiple exclusive references to the memory-backed
@@ -669,11 +673,13 @@ impl<'a> VacantHostEntry<'a> {
     fn insert_subnets_and_host(
         header: *mut Header,
         max_block_index: usize,
-        subnet_indices: impl IntoIterator<Item = u8>,
+        subnet_indices: SmallVec<[u8; 3]>,
         first_subnet_entry: *mut Option<NodeHandle>,
         mmap: *mut MmapMut,
         new_host: Block,
     ) -> InsertHostResult<'a> {
+        tracing::info!("inserting {} subnet tables", subnet_indices.len());
+
         let mut current_subnet_entry = first_subnet_entry;
 
         // On insertion, we need to generate new subnet tables for the remaining
@@ -819,6 +825,8 @@ struct Header {
 impl Header {
     fn alloc_node(&mut self, max_block_index: usize) -> Option<NodeHandle> {
         if self.is_full(max_block_index) {
+            tracing::error!("table is full");
+
             None
         } else {
             // SAFETY: we can contain at least one more node.
@@ -871,6 +879,8 @@ impl Header {
         // [`NodeHandle::from_index_unchecked`].
         self.next_free_node = self.next_free_node.unchecked_add(1);
 
+        tracing::debug!("alloced node with index {}", alloced_node.index());
+
         Some(alloced_node)
     }
 }
@@ -899,6 +909,7 @@ struct Subnet([Option<NodeHandle>; 256]);
 impl Subnet {
     fn get_mut(&mut self, octet: u8) -> &mut Option<NodeHandle> {
         let index = usize::from(octet);
+        tracing::debug!("subnet[{:#x}]", index);
 
         // SAFETY: accessing the array is bijective.
         unsafe { self.0.get_unchecked_mut(index) }
