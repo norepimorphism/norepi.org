@@ -14,7 +14,7 @@ pub mod client;
 pub mod server;
 mod wire;
 
-static SOCKET_NAME: &str = "site-db-remote";
+static SOCKET_NAME: &str = "/tmp/site-db-hosts";
 
 impl Host {
     pub fn new() -> Self {

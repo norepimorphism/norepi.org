@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 [package]
-name = "norepi-site-db-remote"
+name = "norepi-site-db-hosts"
 version = "0.1.0"
 edition = "2021"
 license = "MPL-2.0"
@@ -10,8 +10,12 @@ license = "MPL-2.0"
 path = "src/lib.rs"
 
 [[bin]]
-name = "norepi-db-remoted"
+name = "server"
 path = "src/bin/server.rs"
+
+[[bin]]
+name = "control"
+path = "src/bin/control.rs"
 
 [dependencies]
 bincode = "1.3"

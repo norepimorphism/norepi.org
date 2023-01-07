@@ -20,12 +20,12 @@ fn main() {
 
         match action.as_str() {
             "get" => {
-                match norepi_site_db_remote::client::get_host(ip) {
+                match norepi_site_db_hosts::client::get_host(ip) {
                     Ok(response) => match response {
-                        norepi_site_db_remote::client::GetHostResponse::NotFound => {
+                        norepi_site_db_hosts::client::GetHostResponse::NotFound => {
                             println!("Not found");
                         }
-                        norepi_site_db_remote::client::GetHostResponse::Found(host) => {
+                        norepi_site_db_hosts::client::GetHostResponse::Found(host) => {
                             println!("Found");
                             println!("{:#?}", host);
                         }
@@ -36,7 +36,7 @@ fn main() {
                 }
             }
             "set" => {
-                match norepi_site_db_remote::client::set_host(ip, norepi_site_db_remote::Host::new()) {
+                match norepi_site_db_hosts::client::set_host(ip, norepi_site_db_hosts::Host::new()) {
                     Ok(_) => {}
                     Err(e) => {
                         eprintln!("{:#?}", e);

@@ -826,7 +826,7 @@ dependencies = [
  "dirs",
  "generate-norepi-site",
  "hyper",
- "norepi-site-db-remote",
+ "norepi-site-db-hosts",
  "norepi-site-util",
  "rustls",
  "rustls-pemfile",
@@ -835,7 +835,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "norepi-site-db-remote"
+name = "norepi-site-db-hosts"
 version = "0.1.0"
 dependencies = [
  "bincode",

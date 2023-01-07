@@ -5,7 +5,7 @@ cargo-features = ["profile-rustflags"]
 [workspace]
 members = [
     "site",
-    "site-db-remote",
+    "site-db-hosts",
     "site-db-types",
     "site-util"
 ]
