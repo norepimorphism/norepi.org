@@ -30,7 +30,7 @@ norepi-site-db-hosts = { path = "../site-db-hosts" }
 norepi-site-util = { path = "../site-util" }
 rustls = "0.20"
 rustls-pemfile = "1.0"
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1.24", features = ["macros", "rt-multi-thread", "signal"] }
 tracing = "0.1"
 
 [build-dependencies]
