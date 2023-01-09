@@ -9,17 +9,17 @@ license = "MPL-2.0"
 [lib]
 path = "src/lib.rs"
 
-[[bin]]
-name = "norepi-echod"
-path = "src/bin/echo.rs"
+# [[bin]]
+# name = "norepi-echod"
+# path = "src/bin/echo.rs"
 
 [[bin]]
 name = "norepi-httpd"
 path = "src/bin/http/main.rs"
 
-[[bin]]
-name = "norepi-smtpd"
-path = "src/bin/smtp.rs"
+# [[bin]]
+# name = "norepi-smtpd"
+# path = "src/bin/smtp.rs"
 
 [dependencies]
 chrono = "0.4"

@@ -83,6 +83,7 @@ impl Builder {
             language: None,
             charset: None,
             encoding: None,
+            extra_headers: Vec::new(),
             content: None,
             status_code: None,
         }
@@ -95,6 +96,7 @@ pub struct Builder {
     language: Option<&'static str>,
     charset: Option<&'static str>,
     encoding: Option<&'static str>,
+    extra_headers: Vec<(&'static str, &'static str)>,
     content: Option<&'static str>,
     status_code: Option<StatusCode>,
 }
@@ -107,7 +109,7 @@ impl Builder {
     /// Language tags are described in [RFC 5646].
     ///
     /// [RFC 5646]: https://datatracker.ietf.org/doc/html/rfc5646
-    pub fn language(&mut self, tag: &'static str) -> &mut Self {
+    pub fn language(mut self, tag: &'static str) -> Self {
         self.language = Some(tag);
 
         self
@@ -116,7 +118,7 @@ impl Builder {
     /// Sets the character set, or *charset*, of the resource.
     ///
     /// By default, this is `"utf-8"`.
-    pub fn charset(&mut self, charset: &'static str) -> &mut Self {
+    pub fn charset(mut self, charset: &'static str) -> Self {
         self.charset = Some(charset);
 
         self
@@ -125,8 +127,14 @@ impl Builder {
     /// Sets the content coding of the resource.
     ///
     /// By default, this is `None`.
-    pub fn encoding(&mut self, encoding: &'static str) -> &mut Self {
+    pub fn encoding(mut self, encoding: &'static str) -> Self {
         self.encoding = Some(encoding);
+
+        self
+    }
+
+    pub fn header(mut self, name: &'static str, value: &'static str) -> Self {
+        self.extra_headers.push((name, value));
 
         self
     }
@@ -134,7 +142,7 @@ impl Builder {
     /// Sets the content of the resource.
     ///
     /// By default, this is an empty string.
-    pub fn content(&mut self, content: &'static str) -> &mut Self {
+    pub fn content(mut self, content: &'static str) -> Self {
         self.content = Some(content);
 
         self
@@ -143,7 +151,7 @@ impl Builder {
     /// Sets the status code of the resource.
     ///
     /// By default, this is [`StatusCode::OK`].
-    pub fn status(&mut self, code: StatusCode) -> &mut Self {
+    pub fn status(mut self, code: StatusCode) -> Self {
         self.status_code = Some(code);
 
         self
@@ -156,6 +164,7 @@ impl Builder {
             language: self.language.unwrap_or("en"),
             charset: self.charset.unwrap_or("utf-8"),
             encoding: self.encoding,
+            extra_headers: self.extra_headers,
             content: self.content.unwrap_or_default(),
             status_code: self.status_code.unwrap_or(StatusCode::OK),
         }
@@ -181,6 +190,7 @@ pub struct Resource {
     pub charset: &'static str,
     /// The content coding (e.g., compression), if any.
     pub encoding: Option<&'static str>,
+    pub extra_headers: Vec<(&'static str, &'static str)>,
     /// The content.
     pub content: &'static str,
     /// The HTTP status code to be returned when accessing this resource.
@@ -190,7 +200,7 @@ pub struct Resource {
 impl Resource {
     /// Generates an HTTP response for this resource.
     pub fn response(self) -> Result<Response<Body>, http::Error> {
-        let response = Response::builder()
+        let mut response = Response::builder()
             .status(self.status_code)
             // RFC 9110, Section 8.3:
             //   The "Content-Type" header field indicates the media type of the associated
@@ -229,6 +239,12 @@ impl Resource {
             //
             // See <https://httpwg.org/specs/rfc9110.html#rfc.section.8.4>.
             response = response.header(header::CONTENT_ENCODING, encoding);
+        }
+
+        if let Some(headers) = response.headers_mut() {
+            for (name, value) in self.extra_headers {
+                headers.append(name, HeaderValue::from_static(value));
+            }
         }
 
         response.body(self.content.into())

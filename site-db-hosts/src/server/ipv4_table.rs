@@ -909,7 +909,7 @@ struct Subnet([Option<NodeHandle>; 256]);
 impl Subnet {
     fn get_mut(&mut self, octet: u8) -> &mut Option<NodeHandle> {
         let index = usize::from(octet);
-        tracing::debug!("subnet[{:#x}]", index);
+        tracing::trace!("subnet[{:#x}]", index);
 
         // SAFETY: accessing the array is bijective.
         unsafe { self.0.get_unchecked_mut(index) }

@@ -58,7 +58,7 @@ async fn run() -> Result<(), hyper::Error> {
 }
 
 async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::Error> {
-    let local_addr = (norepi_site::bind::PUBLIC_ADDR, 80).into();
+    let local_addr = (norepi_site_util::bind::PUBLIC_ADDR, 80).into();
     let incoming = AddrIncoming::bind(&local_addr)?;
     // let server = rustls::ServerConfig::builder()
     //     .with_safe_defaults()
@@ -86,7 +86,7 @@ async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::E
 
 #[allow(dead_code)]
 fn tls_certs() -> Vec<rustls::Certificate> {
-    rustls_pemfile::certs(&mut norepi_site::cert::FULLCHAIN)
+    rustls_pemfile::certs(&mut &*norepi_site::cert::FULLCHAIN)
         .expect("failed to read full certificate chain")
         .into_iter()
         .map(rustls::Certificate)
@@ -95,7 +95,7 @@ fn tls_certs() -> Vec<rustls::Certificate> {
 
 #[allow(dead_code)]
 fn tls_key() -> rustls::PrivateKey {
-    rustls_pemfile::rsa_private_keys(&mut norepi_site::cert::RSA_KEY)
+    rustls_pemfile::rsa_private_keys(&mut &*norepi_site::cert::RSA_KEY)
         .expect("failed to read RSA private keys")
         .into_iter()
         .next()
@@ -103,14 +103,15 @@ fn tls_key() -> rustls::PrivateKey {
         .expect("RSA private key is missing")
 }
 
-fn create_service<S, F>(
+fn create_service(
     report: Arc<Mutex<csv::Writer<fs::File>>>,
     sock: &AddrStream,
-) -> S
-where
-    S: Service<Request<Body>, Response = Response<Body>, Error = http::Error, Future = F>,
-    F: Future<Output = Result<Response<Body>, http::Error>> + Sync,
-{
+) -> impl Sync + Service<
+    Request<Body>,
+    Response = Response<Body>,
+    Error = http::Error,
+    Future = impl Future<Output = Result<Response<Body>, http::Error>>
+> {
     let remote_addr = sock.remote_addr();
 
     service_fn(move |req| {
@@ -153,30 +154,61 @@ fn handle_request(
     // Release the mutex lock.
     drop(report);
 
-    if let Some(entry) = norepi_site::blocklist::find(&remote_addr.ip()) {
-        tracing::warn!("request was blocked: {:#?}", entry);
+    let remote_ip = remote_addr.ip();
+    match norepi_site_db_hosts::client::get_host(remote_ip) {
+        Ok(response) => {
+            let is_blocked = match response {
+                norepi_site_db_hosts::client::GetHostResponse::Found(host) => host.is_blocked(),
+                norepi_site_db_hosts::client::GetHostResponse::NotFound => {
+                    // Make a new entry for this host.
+                    if let Err(e) = norepi_site_db_hosts::client::set_host(
+                        remote_ip,
+                        Default::default(),
+                    ) {
+                        tracing::error!(
+                            "failed to insert DB entry for host {}. error: {:#?}",
+                            remote_ip,
+                            e,
+                        );
+                    }
 
-        // RFC 9110, Section 15.5.4:
-        //   The 403 (Forbidden) status code indicates that the server understood
-        //   the request but refuses to fulfill it. A server that wishes to make
-        //   public why the request has been forbidden can describe the reason in
-        //   the response content (if any).
-        //
-        // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.4>.
-        resource::Builder::plaintext()
-            .status(StatusCode::FORBIDDEN)
-            .content({
-                format!(
-                    "You are blocked from accessing norepi.org and its subdomains:\n  {}",
-                    entry.reason,
-                )
-                .into()
-            })
-            .build()
-            .response()
-    } else {
-        respond(req)
+                    false
+                }
+            };
+
+            if is_blocked {
+                tracing::warn!("request from {} was blocked", remote_ip);
+
+                // RFC 9110, Section 15.5.4:
+                //   The 403 (Forbidden) status code indicates that the server understood the
+                //   request but refuses to fulfill it. A server that wishes to make public why the
+                //   request has been forbidden can describe the reason in the response content (if
+                //   any).
+                //
+                // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.4>.
+                return resource::Builder::plaintext()
+                    .status(StatusCode::FORBIDDEN)
+                    .content(concat!(
+                        "You are blocked from accessing norepi.org and its subdomains. If you",
+                        " think this is a mistake, please shoot an email to norepi@protonmail.com.",
+                    ))
+                    .build()
+                    .response();
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                concat!(
+                    "failed to check blocklist for host {}; defaulting to allowing request.",
+                    " error: {:#?}",
+                ),
+                remote_ip,
+                e,
+            );
+        }
     }
+
+    respond(req)
 }
 
 fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
@@ -185,7 +217,7 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
     let req_target = req.uri();
     tracing::debug!("{} {}", req.method(), req_target);
 
-    let response = match req.method() {
+    let mut response = match req.method() {
         // RFC 9110, Section 9.3.1:
         //   The GET method request transfer of a current selected representation for the target
         //   resource.
