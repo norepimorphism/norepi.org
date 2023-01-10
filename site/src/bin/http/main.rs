@@ -134,8 +134,8 @@ fn handle_request(
     // Acquire the mutex lock.
     let mut report = report.lock().expect("mutex is poisoned");
 
-    // | Date | IP Address | TCP Port | HTTP Method | Resouce URI | User Agent |
-    // |------|------------|----------|-------------|-------------|------------|
+    // | Date | IP Address | TCP Port | HTTP Method | Resource URI | User Agent |
+    // |------|------------|----------|-------------|--------------|------------|
     let _ = report.write_field(chrono::Utc::now().to_string());
     let _ = report.write_field(remote_addr.ip().to_canonical().to_string());
     let _ = report.write_field(remote_addr.port().to_string());
@@ -240,7 +240,7 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
         // See <https://httpwg.org/specs/rfc9110.html#rfc.section.9.3.2>.
         &Method::HEAD => {
             // TODO: Our approach is to generate a GET response and discard the body and irrelevant
-            // fields, though RFC 9110 indicates that this is not preferred. Is there a signficiant
+            // fields, though RFC 9110 indicates that this is not preferred. Is there a significant
             // performance cost to doing this?
             get(&req).map(|mut response| {
                 // Discard the body.
