@@ -31,7 +31,7 @@ fn main_impl() -> Result<(), Error> {
         error_stack::bail!(Error::NoArgs);
     };
     let Some(action) = args.next().and_then(|arg| {
-        let user_wants_help = matches!(arg.as_str(), "help | -h | --help");
+        let user_wants_help = matches!(arg.as_str(), "help" | "-h" | "--help");
 
         if user_wants_help {
             None
