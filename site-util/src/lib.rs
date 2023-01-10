@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{future::Future, process};
+use std::{fmt, future::Future, process};
 
 pub mod bind;
 
-pub fn run<E>(serve: impl FnOnce() -> Result<(), E>) -> process::ExitCode
-where
-    E: std::error::Error,
-{
+pub fn run<E: fmt::Display>(serve: impl FnOnce() -> Result<(), E>) -> process::ExitCode {
     prologue();
 
     handle_serve(serve())
@@ -15,7 +12,7 @@ where
 
 pub async fn run_async<E, O>(serve: impl FnOnce() -> O) -> process::ExitCode
 where
-    E: std::error::Error,
+    E: fmt::Display,
     O: Future<Output = Result<(), E>>,
 {
     prologue();
@@ -31,9 +28,9 @@ fn prologue() {
     tracing::info!("{} v{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
 }
 
-fn handle_serve<E: std::error::Error>(result: Result<(), E>) -> process::ExitCode {
+fn handle_serve<E: fmt::Display>(result: Result<(), E>) -> process::ExitCode {
     if let Err(e) = result {
-        tracing::error!("{}", e);
+        eprintln!("{e}");
 
         process::ExitCode::FAILURE
     } else {

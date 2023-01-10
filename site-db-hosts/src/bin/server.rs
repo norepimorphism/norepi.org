@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{convert::Infallible, sync::{atomic::{self, AtomicBool}, Arc}};
+use std::sync::{atomic::{self, AtomicBool}, Arc};
+
+use error_stack::ResultExt as _;
 
 fn main() -> std::process::ExitCode {
+    #[derive(thiserror::Error, Debug)]
+    enum Error {
+        #[error("failed to open server")]
+        Open,
+        #[error("Server::serve() failed")]
+        Serve,
+    }
+
     norepi_site_util::run(|| {
-        let mut server = norepi_site_db_hosts::Server::open("ipv4.db").unwrap();
+        let mut server = norepi_site_db_hosts::Server::open("ipv4.db")
+            .change_context(Error::Open)?;
 
         let should_quit = Arc::new(AtomicBool::new(false));
         {
@@ -14,8 +25,7 @@ fn main() -> std::process::ExitCode {
             })
             .expect("failed to set SIGINT handler");
         }
-        server.serve(|| should_quit.load(atomic::Ordering::Relaxed)).unwrap();
 
-        Ok::<_, Infallible>(())
+        server.serve(|| should_quit.load(atomic::Ordering::Relaxed)).change_context(Error::Serve)
     })
 }
