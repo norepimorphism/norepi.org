@@ -2,37 +2,28 @@
 
 #![feature(addr_parse_ascii)]
 
-use std::{env, fmt, net::IpAddr, process::ExitCode};
+use std::{env, net::IpAddr, process::{ExitCode, Termination as _}};
 
+use error_stack::{IntoReport as _, Result, ResultExt as _};
 use norepi_site_db_hosts::client;
 
 fn main() -> ExitCode {
     match main_impl() {
         Ok(_) => ExitCode::SUCCESS,
-        Err(e) => {
-            println!("error: {e}");
-
-            ExitCode::FAILURE
-        }
+        Err(report) => report.report(),
     }
 }
 
+#[derive(thiserror::Error, Debug)]
 enum Error {
-    StaticMessage(&'static str),
-    HeapMessage(String),
-    GetHost(client::GetHostError),
-    KillServer(client::RequestError<client::KillServer>),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::StaticMessage(s) => f.write_str(s),
-            Self::HeapMessage(s) => f.write_str(s),
-            Self::GetHost(e) => e.fmt(f),
-            Self::KillServer(e) => e.fmt(f),
-        }
-    }
+    #[error("argc is 0. What do you want from me?!")]
+    NoArgs,
+    #[error("action is invalid")]
+    InvalidAction,
+    #[error("'get' action failed")]
+    DoGet,
+    #[error("'kill' action failed")]
+    DoKill,
 }
 
 fn main_impl() -> Result<(), Error> {
@@ -40,7 +31,7 @@ fn main_impl() -> Result<(), Error> {
 
     let Some(exe_name) = args.next() else {
         print_usage(env!("CARGO_PKG_NAME"));
-        return Err(Error::StaticMessage("argc is 0. What do you want from me?!"));
+        error_stack::bail!(Error::NoArgs);
     };
     let Some(action) = args.next().and_then(|arg| {
         let user_wants_help = matches!(arg.as_str(), "help | -h | --help");
@@ -56,9 +47,9 @@ fn main_impl() -> Result<(), Error> {
     };
 
     match action.as_str() {
-        "get" => do_get(args),
-        "kill" => do_kill(),
-        action => Err(Error::HeapMessage(format!("unknown action '{action}'."))),
+        "get" => do_get(args).change_context(Error::DoGet),
+        "kill" => do_kill().change_context(Error::DoKill),
+        _ => Err(error_stack::report!(Error::InvalidAction)),
     }
 }
 
@@ -78,19 +69,33 @@ fn print_usage(exe_name: &str) {
     println!("    server process.");
 }
 
-fn parse_ip(args: &mut env::Args) -> Result<IpAddr, Error> {
-    let Some(ip) = args.next() else {
-        return Err(Error::StaticMessage("expected argument IP-ADDR"));
-    };
-
-    IpAddr::parse_ascii(ip.as_bytes()).map_err(|e| {
-        Error::HeapMessage(format!("failed to parse IP-ADDR: {e}"))
-    })
+#[derive(thiserror::Error, Debug)]
+enum ParseIpError {
+    #[error("expected argument IP-ADDR")]
+    NoArg,
+    #[error("IpAddr::parse_ascii() failed")]
+    Parse,
 }
 
-fn do_get(mut args: env::Args) -> Result<(), Error> {
-    let ip = parse_ip(&mut args)?;
-    let response = client::get_host(ip).map_err(Error::GetHost)?;
+fn parse_ip(args: &mut env::Args) -> Result<IpAddr, ParseIpError> {
+    let Some(ip) = args.next() else {
+        error_stack::bail!(ParseIpError::NoArg);
+    };
+
+    IpAddr::parse_ascii(ip.as_bytes()).into_report().change_context(ParseIpError::Parse)
+}
+
+#[derive(thiserror::Error, Debug)]
+enum DoGetError {
+    #[error("failed to parse IP address")]
+    ParseIp,
+    #[error("client::get_host() failed")]
+    GetHost,
+}
+
+fn do_get(mut args: env::Args) -> Result<(), DoGetError> {
+    let ip = parse_ip(&mut args).change_context(DoGetError::ParseIp)?;
+    let response = client::get_host(ip).change_context(DoGetError::GetHost)?;
 
     match response {
         client::GetHostResponse::NotFound => {
@@ -107,6 +112,12 @@ fn do_get(mut args: env::Args) -> Result<(), Error> {
     Ok(())
 }
 
-fn do_kill() -> Result<(), Error> {
-    client::kill_server().map_err(Error::KillServer)
+#[derive(thiserror::Error, Debug)]
+enum DoKillError {
+    #[error("client::kill_server() failed")]
+    KillServer,
+}
+
+fn do_kill() -> Result<(), DoKillError> {
+    client::kill_server().change_context(DoKillError::KillServer)
 }

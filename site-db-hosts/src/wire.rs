@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{convert::Infallible, io::{self, Read as _, Write as _}, net::{Ipv4Addr, Ipv6Addr}};
+use std::{convert::Infallible, fmt, io::{Read as _, Write as _}, net::{Ipv4Addr, Ipv6Addr}};
 
 use error_stack::{IntoReport as _, Result, ResultExt as _};
 use interprocess::local_socket::LocalSocketStream;
@@ -41,7 +41,10 @@ macro_rules! impl_otw_from_field {
                 Ok(Self { $field: <$field_ty>::read_from_stream(stream)? })
             }
 
-            fn write_to_stream(self, stream: &mut LocalSocketStream) -> Result<(), Self::WriteError> {
+            fn write_to_stream(
+                self,
+                stream: &mut LocalSocketStream,
+            ) -> Result<(), Self::WriteError> {
                 self.$field.write_to_stream(stream)
             }
         }
@@ -163,8 +166,10 @@ impl U8ArrayCoding for RequestHeader {
 
     fn decode(code: [u8; Self::SIZE]) -> Result<Self, Self::DecodeError> {
         Ok(Self {
-            proto: Protocol::decode(code[0]).change_context(DecodeRequestHeaderError::InvalidProtocol)?,
-            action: Action::decode(code[1]).change_context(DecodeRequestHeaderError::InvalidAction)?,
+            proto: Protocol::decode(code[0])
+                .change_context(DecodeRequestHeaderError::InvalidProtocol)?,
+            action: Action::decode(code[1])
+                .change_context(DecodeRequestHeaderError::InvalidAction)?,
         })
     }
 
@@ -180,7 +185,15 @@ pub enum Protocol {
     Ipv6,
 }
 
+#[derive(Debug)]
 pub struct DecodeProtocolError;
+
+impl std::error::Error for DecodeProtocolError {}
+impl fmt::Display for DecodeProtocolError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("code is invalid")
+    }
+}
 
 impl_otw_for_u8!(Protocol);
 impl U8Coding for Protocol {
@@ -211,7 +224,15 @@ pub enum Action {
     SetHost,
 }
 
+#[derive(Debug)]
 pub struct DecodeActionError;
+
+impl std::error::Error for DecodeActionError {}
+impl fmt::Display for DecodeActionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("code is invalid")
+    }
+}
 
 impl_otw_for_u8!(Action);
 impl U8Coding for Action {
@@ -278,15 +299,19 @@ impl U8ArrayCoding for Ipv6Addr {
     }
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum ReadHostError {
+    #[error("LocalSocketStream::read_to_end() failed")]
     ReadToEnd,
+    #[error("failed to deserialize host record")]
     Deserialize,
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum WriteHostError {
+    #[error("failed to serialize host record")]
     Serialize,
+    #[error("LocalSocketStream::write_all() failed")]
     WriteAll,
 }
 
@@ -327,16 +352,20 @@ pub struct SetV4HostPayload {
     pub host: Host,
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum ReadSetV4HostPayloadError {
-    ReadIp(ReadIpv4AddrError),
-    ReadHost(ReadHostError),
+    #[error("failed to read IPv4 address from stream")]
+    ReadIp,
+    #[error("failed to read host record from stream")]
+    ReadHost,
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum WriteSetV4HostPayloadError {
-    WriteIp(io::Error),
-    WriteHost(WriteHostError),
+    #[error("failed to write IPv4 address to stream")]
+    WriteIp,
+    #[error("failed to write host record to stream")]
+    WriteHost,
 }
 
 impl OverTheWire for SetV4HostPayload {
@@ -344,15 +373,17 @@ impl OverTheWire for SetV4HostPayload {
     type WriteError = WriteSetV4HostPayloadError;
 
     fn read_from_stream(stream: &mut LocalSocketStream) -> Result<Self, Self::ReadError> {
-        let ip = Ipv4Addr::read_from_stream(stream).map_err(Self::ReadError::ReadIp)?;
-        let host = Host::read_from_stream(stream).map_err(Self::ReadError::ReadHost)?;
+        let ip = Ipv4Addr::read_from_stream(stream)
+            .change_context(ReadSetV4HostPayloadError::ReadIp)?;
+        let host = Host::read_from_stream(stream)
+            .change_context(ReadSetV4HostPayloadError::ReadHost)?;
 
         Ok(Self { ip, host })
     }
 
     fn write_to_stream(self, stream: &mut LocalSocketStream) -> Result<(), Self::WriteError> {
-        self.ip.write_to_stream(stream).map_err(Self::WriteError::WriteIp)?;
-        self.host.write_to_stream(stream).map_err(Self::WriteError::WriteHost)?;
+        self.ip.write_to_stream(stream).change_context(WriteSetV4HostPayloadError::WriteIp)?;
+        self.host.write_to_stream(stream).change_context(WriteSetV4HostPayloadError::WriteHost)?;
 
         Ok(())
     }
@@ -363,16 +394,20 @@ pub struct SetV6HostPayload {
     pub host: Host,
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum ReadSetV6HostPayloadError {
-    ReadIp(ReadIpv6AddrError),
-    ReadHost(ReadHostError),
+    #[error("failed to read IPv6 address from stream")]
+    ReadIp,
+    #[error("failed to read host record from stream")]
+    ReadHost,
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum WriteSetV6HostPayloadError {
-    WriteIp(io::Error),
-    WriteHost(WriteHostError),
+    #[error("failed to write IPv6 address to stream")]
+    WriteIp,
+    #[error("failed to write host record to stream")]
+    WriteHost,
 }
 
 impl OverTheWire for SetV6HostPayload {
@@ -380,15 +415,17 @@ impl OverTheWire for SetV6HostPayload {
     type WriteError = WriteSetV6HostPayloadError;
 
     fn read_from_stream(stream: &mut LocalSocketStream) -> Result<Self, Self::ReadError> {
-        let ip = Ipv6Addr::read_from_stream(stream).map_err(Self::ReadError::ReadIp)?;
-        let host = Host::read_from_stream(stream).map_err(Self::ReadError::ReadHost)?;
+        let ip = Ipv6Addr::read_from_stream(stream)
+            .change_context(ReadSetV6HostPayloadError::ReadIp)?;
+        let host = Host::read_from_stream(stream)
+            .change_context(ReadSetV6HostPayloadError::ReadHost)?;
 
         Ok(Self { ip, host })
     }
 
     fn write_to_stream(self, stream: &mut LocalSocketStream) -> Result<(), Self::WriteError> {
-        self.ip.write_to_stream(stream).map_err(Self::WriteError::WriteIp)?;
-        self.host.write_to_stream(stream).map_err(Self::WriteError::WriteHost)?;
+        self.ip.write_to_stream(stream).change_context(WriteSetV6HostPayloadError::WriteIp)?;
+        self.host.write_to_stream(stream).change_context(WriteSetV6HostPayloadError::WriteHost)?;
 
         Ok(())
     }
@@ -399,15 +436,25 @@ pub enum HostStatus {
     NotFound,
 }
 
+#[derive(Debug)]
+pub struct DecodeHostStatusError;
+
+impl std::error::Error for DecodeHostStatusError {}
+impl fmt::Display for DecodeHostStatusError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("code is invalid")
+    }
+}
+
 impl_otw_for_u8!(HostStatus);
 impl U8Coding for HostStatus {
-    type DecodeError = ();
+    type DecodeError = DecodeHostStatusError;
 
     fn decode(code: u8) -> Result<Self, Self::DecodeError> {
         match code {
             0 => Ok(Self::NotFound),
             1 => Ok(Self::Found),
-            _ => Err(()),
+            _ => Err(error_stack::report!(DecodeHostStatusError)),
         }
     }
 
@@ -425,16 +472,20 @@ pub enum GetHostResponse {
     Found(Host),
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum ReadGetHostResponseError {
-    ReadStatus(ReadHostStatusError),
-    ReadHost(ReadHostError),
+    #[error("failed to read status from stream")]
+    ReadStatus,
+    #[error("failed to read host record from stream")]
+    ReadHost,
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum WriteGetHostResponseError {
-    WriteStatus(io::Error),
-    WriteHost(WriteHostError),
+    #[error("failed to write status to stream")]
+    WriteStatus,
+    #[error("failed to write host record to stream")]
+    WriteHost,
 }
 
 impl OverTheWire for GetHostResponse {
@@ -443,20 +494,26 @@ impl OverTheWire for GetHostResponse {
 
     fn read_from_stream(stream: &mut LocalSocketStream) -> Result<Self, Self::ReadError> {
         let status = HostStatus::read_from_stream(stream)
-            .map_err(Self::ReadError::ReadStatus)?;
+            .change_context(ReadGetHostResponseError::ReadStatus)?;
 
         match status {
             HostStatus::NotFound => Ok(Self::NotFound),
             HostStatus::Found => {
-                Ok(Self::Found(Host::read_from_stream(stream).map_err(Self::ReadError::ReadHost)?))
+                let host = Host::read_from_stream(stream)
+                    .change_context(ReadGetHostResponseError::ReadHost)?;
+
+                Ok(Self::Found(host))
             }
         }
     }
 
     fn write_to_stream(self, stream: &mut LocalSocketStream) -> Result<(), Self::WriteError> {
-        self.status().write_to_stream(stream).map_err(Self::WriteError::WriteStatus)?;
+        self
+            .status()
+            .write_to_stream(stream)
+            .change_context(WriteGetHostResponseError::WriteStatus)?;
         if let Self::Found(host) = self {
-            host.write_to_stream(stream).map_err(Self::WriteError::WriteHost)?;
+            host.write_to_stream(stream).change_context(WriteGetHostResponseError::WriteHost)?;
         }
 
         Ok(())

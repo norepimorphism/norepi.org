@@ -41,6 +41,7 @@ impl Server {
             .into_report()
             .change_context(ServeError::Bind)?;
 
+        tracing::info!("Serving on '{}'...", crate::SOCKET_NAME);
         while !should_quit() {
             let Ok(mut stream) = listener.accept() else {
                 continue;
@@ -48,21 +49,32 @@ impl Server {
 
             match wire::RequestHeader::read_from_stream(&mut stream) {
                 Ok(header) => {
-                    if let Err(report) = self.respond(&mut stream, header) {
-                        println!("{report}");
+                    match self.respond(&mut stream, header) {
+                        Ok(ctrl) => if matches!(ctrl, ControlFlow::Return) {
+                            break;
+                        }
+                        Err(report) => {
+                            eprintln!("{report}");
+                        }
                     }
                 }
                 Err(e) => {
                     let report = error_stack::report!(e)
                         .attach_printable("failed to read request header from stream")
                         .to_string();
-                    println!("{report}");
+                    eprintln!("{report}");
                 }
             }
         }
+        tracing::info!("Goodbye!");
 
         Ok(())
     }
+}
+
+enum ControlFlow {
+    Continue,
+    Return,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -78,20 +90,29 @@ impl Server {
         &mut self,
         stream: &mut LocalSocketStream,
         header: wire::RequestHeader,
-    ) -> Result<(), RespondError> {
+    ) -> Result<ControlFlow, RespondError> {
         use wire::{Action, RequestHeader, Protocol};
 
         let RequestHeader { proto, action, .. } = header;
 
         match (proto, action) {
-            (Protocol::Ipv4, Action::GetHost) => self
-                .respond_to_get_v4_host(stream)
-                .change_context(RespondError::GetV4Host),
-            (Protocol::Ipv4, Action::SetHost) => self
-                .respond_to_set_v4_host(stream)
-                .change_context(RespondError::SetV4Host),
+            (Protocol::Control, Action::Die) => {
+                return Ok(ControlFlow::Return);
+            }
+            (Protocol::Ipv4, Action::GetHost) => {
+                self
+                    .respond_to_get_v4_host(stream)
+                    .change_context(RespondError::GetV4Host)?;
+            }
+            (Protocol::Ipv4, Action::SetHost) => {
+                self
+                    .respond_to_set_v4_host(stream)
+                    .change_context(RespondError::SetV4Host)?;
+            }
             _ => todo!(),
         }
+
+        Ok(ControlFlow::Continue)
     }
 }
 

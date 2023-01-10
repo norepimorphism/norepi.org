@@ -242,9 +242,6 @@ pub enum LoadTableError {
     /// This error is returned when the buffer is less than 2048 bytes in size.
     #[error("buffer is smaller than 2048 bytes")]
     BufferTooSmall,
-    /// The buffer contains an invalid table.
-    #[error("buffer contains invalid table")]
-    InvalidHeaderStamp,
 }
 
 impl Table {
