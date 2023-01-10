@@ -1,59 +1,64 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{io, net::{IpAddr, Ipv4Addr, Ipv6Addr}};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use error_stack::{IntoReport, Result, ResultExt as _};
 use interprocess::local_socket::LocalSocketStream;
 
 use crate::{wire::{self, OverTheWire}, Host};
 pub use wire::GetHostResponse;
 
-pub fn kill_server() -> Result<(), RequestError<KillServer>> {
+pub fn kill_server() -> Result<(), RequestError> {
     let _ = request(KillServer)?;
 
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum GetHostError {
-    V4(RequestError<GetV4Host>),
-    V6(RequestError<GetV6Host>),
+    #[error("failed to get IPv4 host")]
+    V4,
+    #[error("failed to get IPv6 host")]
+    V6,
 }
 
 pub fn get_host(ip: IpAddr) -> Result<GetHostResponse, GetHostError> {
     match ip {
-        IpAddr::V4(ip) => get_v4_host(ip).map_err(GetHostError::V4),
-        IpAddr::V6(ip) => get_v6_host(ip).map_err(GetHostError::V6),
+        IpAddr::V4(ip) => get_v4_host(ip).change_context(GetHostError::V4),
+        IpAddr::V6(ip) => get_v6_host(ip).change_context(GetHostError::V6),
     }
 }
 
-pub fn get_v4_host(ip: Ipv4Addr) -> Result<GetHostResponse, RequestError<GetV4Host>> {
+pub fn get_v4_host(ip: Ipv4Addr) -> Result<GetHostResponse, RequestError> {
     request(GetV4Host { ip })
 }
 
-pub fn get_v6_host(ip: Ipv6Addr) -> Result<GetHostResponse, RequestError<GetV6Host>> {
+pub fn get_v6_host(ip: Ipv6Addr) -> Result<GetHostResponse, RequestError> {
     request(GetV6Host { ip })
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum SetHostError {
-    V4(RequestError<SetV4Host>),
-    V6(RequestError<SetV6Host>),
+    #[error("failed to set IPv4 host")]
+    V4,
+    #[error("failed to set IPv6 host")]
+    V6,
 }
 
 pub fn set_host(ip: IpAddr, host: Host) -> Result<(), SetHostError> {
     match ip {
-        IpAddr::V4(ip) => set_v4_host(ip, host).map_err(SetHostError::V4),
-        IpAddr::V6(ip) => set_v6_host(ip, host).map_err(SetHostError::V6),
+        IpAddr::V4(ip) => set_v4_host(ip, host).change_context(SetHostError::V4),
+        IpAddr::V6(ip) => set_v6_host(ip, host).change_context(SetHostError::V6),
     }
 }
 
-pub fn set_v4_host(ip: Ipv4Addr, host: Host) -> Result<(), RequestError<SetV4Host>> {
+pub fn set_v4_host(ip: Ipv4Addr, host: Host) -> Result<(), RequestError> {
     let _ = request(SetV4Host { ip, host })?;
 
     Ok(())
 }
 
-pub fn set_v6_host(ip: Ipv6Addr, host: Host) -> Result<(), RequestError<SetV6Host>> {
+pub fn set_v6_host(ip: Ipv6Addr, host: Host) -> Result<(), RequestError> {
     let _ = request(SetV6Host { ip, host })?;
 
     Ok(())
@@ -157,20 +162,25 @@ impl Request for SetV6Host {
     }
 }
 
-#[derive(Debug)]
-pub enum RequestError<Req: Request> {
-    Connect(io::Error),
-    WriteHeader(<wire::RequestHeader as OverTheWire>::WriteError),
-    WritePayload(<<Req as Request>::Payload as OverTheWire>::WriteError),
-    ReadResponse(<<Req as Request>::Response as OverTheWire>::ReadError),
+#[derive(thiserror::Error, Debug)]
+pub enum RequestError {
+    #[error("failed to connect to socket")]
+    Connect,
+    #[error("failed to write request header to stream")]
+    WriteHeader,
+    #[error("failed to write request payload to stream")]
+    WritePayload,
+    #[error("failed to read response from stream")]
+    ReadResponse,
 }
 
-pub fn request<Req: Request>(req: Req) -> Result<Req::Response, RequestError<Req>> {
+pub fn request<Req: Request>(req: Req) -> Result<Req::Response, RequestError> {
     let mut stream = LocalSocketStream::connect(crate::SOCKET_NAME)
-        .map_err(RequestError::Connect)?;
-    req.header().write_to_stream(&mut stream).map_err(RequestError::WriteHeader)?;
-    req.payload().write_to_stream(&mut stream).map_err(RequestError::WritePayload)?;
+        .into_report()
+        .change_context(RequestError::Connect)?;
+    req.header().write_to_stream(&mut stream).change_context(RequestError::WriteHeader)?;
+    req.payload().write_to_stream(&mut stream).change_context(RequestError::WritePayload)?;
 
     <<Req as Request>::Response as OverTheWire>::read_from_stream(&mut stream)
-        .map_err(RequestError::ReadResponse)
+        .change_context(RequestError::ReadResponse)
 }

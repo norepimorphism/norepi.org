@@ -4,7 +4,7 @@ use std::{future::Future, process};
 
 pub mod bind;
 
-pub fn run<E>(serve: impl Fn() -> Result<(), E>) -> process::ExitCode
+pub fn run<E>(serve: impl FnOnce() -> Result<(), E>) -> process::ExitCode
 where
     E: std::error::Error,
 {
@@ -13,7 +13,7 @@ where
     handle_serve(serve())
 }
 
-pub async fn run_async<E, O>(serve: impl Fn() -> O) -> process::ExitCode
+pub async fn run_async<E, O>(serve: impl FnOnce() -> O) -> process::ExitCode
 where
     E: std::error::Error,
     O: Future<Output = Result<(), E>>,

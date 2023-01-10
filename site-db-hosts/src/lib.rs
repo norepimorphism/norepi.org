@@ -10,7 +10,6 @@ use norepi_site_db_types::{Duration, Timestamp};
 pub use server::Server;
 
 pub mod client;
-#[cfg(any(target_pointer_width = "32", target_pointer_width = "64", target_pointer_width = "128"))]
 pub mod server;
 mod wire;
 

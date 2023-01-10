@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{convert::Infallible, fmt, io::{self, Read as _, Write as _}, net::{Ipv4Addr, Ipv6Addr}};
+use std::{convert::Infallible, io::{self, Read as _, Write as _}, net::{Ipv4Addr, Ipv6Addr}};
 
+use error_stack::{IntoReport as _, Result, ResultExt as _};
 use interprocess::local_socket::LocalSocketStream;
 
 use crate::Host;
 
 pub trait OverTheWire: Sized {
-    type ReadError: fmt::Debug;
-    type WriteError: fmt::Debug;
+    type ReadError: error_stack::Context;
+    type WriteError: error_stack::Context;
 
     fn read_from_stream(stream: &mut LocalSocketStream) -> Result<Self, Self::ReadError>;
 
@@ -47,56 +48,76 @@ macro_rules! impl_otw_from_field {
     };
 }
 
-macro_rules! impl_otw_for_u8_array {
-    ($ty:ty, $e:ident $(,)?) => {
-        #[derive(Debug)]
-        pub enum $e {
-            Io(io::Error),
-            Decode(<$ty as U8ArrayCoding>::DecodeError),
-        }
+#[derive(thiserror::Error, Debug)]
+pub enum ReadU8ArrayError {
+    #[error("LocalSocketStream::read_exact() failed")]
+    ReadExact,
+    #[error("decoding failed")]
+    Decode,
+}
 
+#[derive(thiserror::Error, Debug)]
+pub enum WriteU8ArrayError {
+    #[error("LocalSocketStream::write_all() failed")]
+    WriteAll,
+}
+
+macro_rules! impl_otw_for_u8_array {
+    ($ty:ty) => {
         impl OverTheWire for $ty
         where
             [(); <$ty>::SIZE]: Sized,
         {
-            type ReadError = $e;
-            type WriteError = io::Error;
+            type ReadError = ReadU8ArrayError;
+            type WriteError = WriteU8ArrayError;
 
             fn read_from_stream(stream: &mut LocalSocketStream) -> Result<Self, Self::ReadError> {
                 let mut buf = [0; <$ty>::SIZE];
-                stream.read_exact(&mut buf).map_err(<$e>::Io)?;
+                stream
+                    .read_exact(&mut buf)
+                    .into_report()
+                    .change_context(ReadU8ArrayError::ReadExact)?;
 
-                <$ty>::decode(buf).map_err(<$e>::Decode)
+                <$ty>::decode(buf).change_context(ReadU8ArrayError::Decode)
             }
 
-            fn write_to_stream(self, stream: &mut LocalSocketStream) -> Result<(), Self::WriteError> {
-                stream.write_all(&self.encode())
+            fn write_to_stream(
+                self,
+                stream: &mut LocalSocketStream,
+            ) -> Result<(), Self::WriteError> {
+                stream
+                    .write_all(&self.encode())
+                    .into_report()
+                    .change_context(WriteU8ArrayError::WriteAll)
             }
         }
     };
 }
 
 macro_rules! impl_otw_for_u8 {
-    ($ty:ty, $e:ident $(,)?) => {
-        #[derive(Debug)]
-        pub enum $e {
-            Io(io::Error),
-            Decode(<$ty as U8Coding>::DecodeError),
-        }
-
+    ($ty:ty) => {
         impl OverTheWire for $ty {
-            type ReadError = $e;
-            type WriteError = io::Error;
+            type ReadError = ReadU8ArrayError;
+            type WriteError = WriteU8ArrayError;
 
             fn read_from_stream(stream: &mut LocalSocketStream) -> Result<Self, Self::ReadError> {
                 let mut buf = [0];
-                stream.read_exact(&mut buf).map_err(<$e>::Io)?;
+                stream
+                    .read_exact(&mut buf)
+                    .into_report()
+                    .change_context(ReadU8ArrayError::ReadExact)?;
 
-                <$ty>::decode(buf[0]).map_err(<$e>::Decode)
+                <$ty>::decode(buf[0]).change_context(ReadU8ArrayError::Decode)
             }
 
-            fn write_to_stream(self, stream: &mut LocalSocketStream) -> Result<(), Self::WriteError> {
-                stream.write_all(&[self.encode()])
+            fn write_to_stream(
+                self,
+                stream: &mut LocalSocketStream,
+            ) -> Result<(), Self::WriteError> {
+                stream
+                    .write_all(&[self.encode()])
+                    .into_report()
+                    .change_context(WriteU8ArrayError::WriteAll)
             }
         }
     };
@@ -105,7 +126,7 @@ macro_rules! impl_otw_for_u8 {
 pub trait U8ArrayCoding: Sized {
     const SIZE: usize;
 
-    type DecodeError;
+    type DecodeError: error_stack::Context;
 
     fn decode(code: [u8; Self::SIZE]) -> Result<Self, Self::DecodeError>;
 
@@ -113,7 +134,7 @@ pub trait U8ArrayCoding: Sized {
 }
 
 pub trait U8Coding: Sized {
-    type DecodeError;
+    type DecodeError: error_stack::Context;
 
     fn decode(code: u8) -> Result<Self, Self::DecodeError>;
 
@@ -126,13 +147,15 @@ pub struct RequestHeader {
     pub action: Action,
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum DecodeRequestHeaderError {
+    #[error("protocol is invalid")]
     InvalidProtocol,
+    #[error("action is invalid")]
     InvalidAction,
 }
 
-impl_otw_for_u8_array!(RequestHeader, ReadRequestHeaderError);
+impl_otw_for_u8_array!(RequestHeader);
 impl U8ArrayCoding for RequestHeader {
     const SIZE: usize = 2;
 
@@ -140,8 +163,8 @@ impl U8ArrayCoding for RequestHeader {
 
     fn decode(code: [u8; Self::SIZE]) -> Result<Self, Self::DecodeError> {
         Ok(Self {
-            proto: Protocol::decode(code[0]).map_err(|_| DecodeRequestHeaderError::InvalidProtocol)?,
-            action: Action::decode(code[1]).map_err(|_| DecodeRequestHeaderError::InvalidAction)?,
+            proto: Protocol::decode(code[0]).change_context(DecodeRequestHeaderError::InvalidProtocol)?,
+            action: Action::decode(code[1]).change_context(DecodeRequestHeaderError::InvalidAction)?,
         })
     }
 
@@ -157,16 +180,18 @@ pub enum Protocol {
     Ipv6,
 }
 
-impl_otw_for_u8!(Protocol, ReadProtocolError);
+pub struct DecodeProtocolError;
+
+impl_otw_for_u8!(Protocol);
 impl U8Coding for Protocol {
-    type DecodeError = ();
+    type DecodeError = DecodeProtocolError;
 
     fn decode(code: u8) -> Result<Self, Self::DecodeError> {
         match code {
             0 => Ok(Self::Control),
             1 => Ok(Self::Ipv4),
             2 => Ok(Self::Ipv6),
-            _ => Err(()),
+            _ => Err(error_stack::report!(DecodeProtocolError)),
         }
     }
 
@@ -186,16 +211,18 @@ pub enum Action {
     SetHost,
 }
 
-impl_otw_for_u8!(Action, ReadActionError);
+pub struct DecodeActionError;
+
+impl_otw_for_u8!(Action);
 impl U8Coding for Action {
-    type DecodeError = ();
+    type DecodeError = DecodeActionError;
 
     fn decode(code: u8) -> Result<Self, Self::DecodeError> {
         match code {
             0 => Ok(Self::Die),
             1 => Ok(Self::GetHost),
             2 => Ok(Self::SetHost),
-            _ => Err(()),
+            _ => Err(error_stack::report!(DecodeActionError)),
         }
     }
 
@@ -208,7 +235,7 @@ impl U8Coding for Action {
     }
 }
 
-impl_otw_for_u8_array!(Ipv4Addr, ReadIpv4AddrError);
+impl_otw_for_u8_array!(Ipv4Addr);
 impl U8ArrayCoding for Ipv4Addr {
     const SIZE: usize = 4;
 
@@ -223,7 +250,7 @@ impl U8ArrayCoding for Ipv4Addr {
     }
 }
 
-impl_otw_for_u8_array!(Ipv6Addr, ReadIpv6AddrError);
+impl_otw_for_u8_array!(Ipv6Addr);
 impl U8ArrayCoding for Ipv6Addr {
     const SIZE: usize = 16;
 
@@ -253,14 +280,14 @@ impl U8ArrayCoding for Ipv6Addr {
 
 #[derive(Debug)]
 pub enum ReadHostError {
-    Io(io::Error),
-    Deserialize(bincode::Error),
+    ReadToEnd,
+    Deserialize,
 }
 
 #[derive(Debug)]
 pub enum WriteHostError {
-    Io(io::Error),
-    Serialize(bincode::Error),
+    Serialize,
+    WriteAll,
 }
 
 impl OverTheWire for Host {
@@ -269,16 +296,19 @@ impl OverTheWire for Host {
 
     fn read_from_stream(stream: &mut LocalSocketStream) -> Result<Self, Self::ReadError> {
         let mut buf = Vec::new();
-        stream.read_to_end(&mut buf).map_err(Self::ReadError::Io)?;
+        stream.read_to_end(&mut buf).into_report().change_context(ReadHostError::ReadToEnd)?;
 
         bincode::deserialize(buf.as_slice())
-            .map_err(Self::ReadError::Deserialize)
+            .into_report()
+            .change_context(ReadHostError::Deserialize)
     }
 
     fn write_to_stream(self, stream: &mut LocalSocketStream) -> Result<(), Self::WriteError> {
-        let buf = bincode::serialize(&self).map_err(Self::WriteError::Serialize)?;
+        let buf = bincode::serialize(&self)
+            .into_report()
+            .change_context(WriteHostError::Serialize)?;
 
-        stream.write_all(buf.as_slice()).map_err(Self::WriteError::Io)
+        stream.write_all(buf.as_slice()).into_report().change_context(WriteHostError::WriteAll)
     }
 }
 
@@ -369,7 +399,7 @@ pub enum HostStatus {
     NotFound,
 }
 
-impl_otw_for_u8!(HostStatus, ReadHostStatusError);
+impl_otw_for_u8!(HostStatus);
 impl U8Coding for HostStatus {
     type DecodeError = ();
 
