@@ -2,16 +2,13 @@
 
 #![feature(addr_parse_ascii)]
 
-use std::{env, net::IpAddr, process::{ExitCode, Termination as _}};
+use std::{env, net::IpAddr, process};
 
 use error_stack::{IntoReport as _, Result, ResultExt as _};
 use norepi_site_db_hosts::client;
 
-fn main() -> ExitCode {
-    match main_impl() {
-        Ok(_) => ExitCode::SUCCESS,
-        Err(report) => report.report(),
-    }
+fn main() -> process::ExitCode {
+    norepi_site_util::run(main_impl)
 }
 
 #[derive(thiserror::Error, Debug)]
