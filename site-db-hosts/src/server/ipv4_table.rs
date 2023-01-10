@@ -904,10 +904,23 @@ impl Header {
     }
 }
 
-enum TableUsage {
+pub enum TableUsage {
     Full,
     NotFull {
-        next_free_block: usize,
+        remaining_blocks: usize,
+    }
+}
+
+impl Table {
+    pub fn remaining_blocks(&self) -> usize {
+        match self.usage() {
+            TableUsage::Full => 0,
+            TableUsage::NotFull { remaining_blocks: it } => it,
+        }
+    }
+
+    pub fn usage(&self) -> TableUsage {
+        self.header.usage(self.max_block_index())
     }
 }
 
@@ -918,7 +931,13 @@ impl Header {
                 match next_free_node.block_index() {
                     Some(block_index) => {
                         if block_index <= max_block_index {
-                            TableUsage::NotFull { next_free_block: block_index }
+                            // SAFETY: TODO
+                            let remaining_blocks = unsafe {
+                                max_block_index.unchecked_sub(block_index)
+                            };
+                            tracing::debug!("remaining_blocks: {remaining_blocks}");
+
+                            TableUsage::NotFull { remaining_blocks }
                         } else {
                             TableUsage::Full
                         }
