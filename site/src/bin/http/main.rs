@@ -363,6 +363,7 @@ fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
         "/contact" => resource::include_gen!("contact"."html"),
         "/noctane" => resource::include_gen!("noctane"."html"),
         "/source" => resource::include_gen!("source"."html"),
+        "/abuseipdb-verification.html" => resource::include_!("abuseipdb-verification"."txt"),
         _ => resource::include_gen!("404"."html").status(StatusCode::NOT_FOUND),
     }
     .build();
