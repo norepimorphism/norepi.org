@@ -15,6 +15,7 @@ use hyper::{
     Response,
     Server,
     StatusCode,
+    Uri,
 };
 
 mod resource;
@@ -217,6 +218,13 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
     let req_target = req.uri();
     tracing::debug!("{} {}", req.method(), req_target);
 
+    if target_is_malicious(req_target) {
+        tracing::warn!("request is probably malicious");
+
+        // TODO: in the future, this may incur a suspension or ban.
+        return Response::builder().status(StatusCode::IM_A_TEAPOT).body(Body::empty());
+    }
+
     let mut response = match req.method() {
         // RFC 9110, Section 9.3.1:
         //   The GET method request transfer of a current selected representation for the target
@@ -325,6 +333,25 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
     headers.insert(header::SERVER, HeaderValue::from_static(SERVER));
 
     Ok(response)
+}
+
+fn target_is_malicious(uri: &Uri) -> bool {
+    let path = uri.path();
+    if path == "/boaform/admin/formLogin" {
+        return true;
+    }
+
+    let mut components = path.rsplit('/');
+    if let Some(filename) = components.next() {
+        if matches!(filename, "wlwmanifest.xml" | ".env") {
+            return true;
+        }
+    }
+    if components.any(|dir| matches!(dir, "wp-admin" | "wp-includes")) {
+        return true;
+    }
+
+    false
 }
 
 fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
