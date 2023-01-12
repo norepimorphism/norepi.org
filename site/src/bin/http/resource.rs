@@ -215,6 +215,8 @@ impl Resource {
                 header::CONTENT_TYPE,
                 format!("{};charset={}", self.mime_type, self.charset),
             )
+            // No need to MIME-sniff.
+            .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
             // RFC 9110, Section 8.5:
             //   The "Content-Language" header field describes the natural language(s) of the
             //   intended audience for the representation.
@@ -223,7 +225,36 @@ impl Resource {
             //   documents.
             //
             // See <https://httpwg.org/specs/rfc9110.html#rfc.section.8.5>.
-            .header(header::CONTENT_LANGUAGE, self.language);
+            .header(header::CONTENT_LANGUAGE, self.language)
+            // RFC 9110, Section 5.2:
+            //   The "Cache-Control" header field is used to list directives for caches along the
+            //   request/response chain. Cache directives are unidirectional, in that the presence
+            //   of a directive in a request does not imply the same directive is present or copied
+            //   in the response.
+            //
+            // See <https://httpwg.org/specs/rfc9111.html#rfc.section.5.2>.
+            .header(
+                header::CACHE_CONTROL,
+                // RFC 9111, Section 5.2.2.1:
+                //   The max-age response directive indicates that the response is to be considered
+                //   stale after its age is greater than the specified number of seconds.
+                //
+                // See <https://httpwg.org/specs/rfc9111.html#rfc.section.5.2.2.1>.
+
+                // TODO: don't hardcode this.
+                "max-age=3600",
+            )
+            // RFC 9110, Section 12.5.5:
+            //   The "Vary" header field in a response describes what parts of a request message,
+            //   aside from the method and target URI, might have influenced the origin server's
+            //   process for selecting the content of this response.
+            //
+            //   A Vary field value is either the wildcard member "*" or a list of request field
+            //   names, known as the selecting header fields, that might have had a role in
+            //   selecting the representation for this response.
+            //
+            // See <https://httpwg.org/specs/rfc9110.html#rfc.section.12.5.5>.
+            .header(header::VARY, "accept-charset, accept-encoding, accept-language");
         if let Some(encoding) = self.encoding {
             // RFC 9110, Section 8.4:
             //   The "Content-Encoding" header field indicates what content codings have been
