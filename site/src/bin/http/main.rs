@@ -24,7 +24,8 @@ use hyper::{
     StatusCode,
     Uri,
 };
-use tls_listener::rustls::{rustls as rustls, TlsAcceptor};
+use tls_listener::rustls::rustls as rustls;
+use tls_listener::rustls::{server::TlsStream, TlsAcceptor};
 
 mod resource;
 
@@ -79,11 +80,12 @@ async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::E
         .listen(AddrIncoming::bind(&local_addr)?);
 
     Server::builder(listener)
-        .serve(make_service_fn(move |sock| {
+        .serve(make_service_fn(move |stream: &TlsStream<AddrStream>| {
             // This closure is invoked for each remote connection, so we need to clone `report` to
             // use it.
             let report = Arc::clone(&report);
 
+            let (sock, _) = stream.get_ref();
             let result = Ok::<_, http::Error>(create_service(report, sock));
 
             async move { result }
@@ -94,6 +96,9 @@ async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::E
                 .expect("failed to install shutdown signal handler")
         })
         .await
+        .unwrap();
+
+    Ok(())
 }
 
 fn tls_certs() -> Vec<rustls::Certificate> {
