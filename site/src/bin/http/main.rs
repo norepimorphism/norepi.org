@@ -2,7 +2,14 @@
 
 #![feature(byte_slice_trim_ascii, ip)]
 
-use std::{env, fs, future::Future, io::Write as _, net::SocketAddr, sync::{Arc, Mutex}};
+use std::{
+    env,
+    fs,
+    future::Future,
+    io::Write as _,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
 
 use hyper::{
     header::{self, HeaderValue},
@@ -17,6 +24,7 @@ use hyper::{
     StatusCode,
     Uri,
 };
+use tokio_rustls::rustls as rustls;
 
 mod resource;
 
@@ -59,13 +67,16 @@ async fn run() -> Result<(), hyper::Error> {
 }
 
 async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::Error> {
-    let local_addr = (norepi_site_util::bind::PUBLIC_ADDR, 80).into();
-    let incoming = AddrIncoming::bind(&local_addr)?;
-    // let server = rustls::ServerConfig::builder()
-    //     .with_safe_defaults()
-    //     .with_no_client_auth()
-    //     .with_single_cert(tls_certs(), tls_key())
-    //     .expect("failed to build server configuration");
+    let config = rustls::ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_single_cert(tls_certs(), tls_key())
+        .expect("failed to build server configuration");
+    let tls = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let local_addr: SocketAddr = (norepi_site_util::bind::PUBLIC_ADDR, 80).into();
+    // TODO: don't unwrap.
+    let listener = tokio::net::TcpListener::bind(local_addr).await.unwrap();
+    let incoming = AddrIncoming::from_listener(listener)?;
 
     Server::builder(incoming)
         .serve(make_service_fn(move |sock| {
@@ -85,7 +96,6 @@ async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::E
         .await
 }
 
-#[allow(dead_code)]
 fn tls_certs() -> Vec<rustls::Certificate> {
     rustls_pemfile::certs(&mut &*norepi_site::cert::FULLCHAIN)
         .expect("failed to read full certificate chain")
@@ -94,9 +104,8 @@ fn tls_certs() -> Vec<rustls::Certificate> {
         .collect()
 }
 
-#[allow(dead_code)]
 fn tls_key() -> rustls::PrivateKey {
-    rustls_pemfile::rsa_private_keys(&mut &*norepi_site::cert::RSA_KEY)
+    rustls_pemfile::rsa_private_keys(&mut &*norepi_site::cert::PRIVKEY)
         .expect("failed to read RSA private keys")
         .into_iter()
         .next()
