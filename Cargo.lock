@@ -846,7 +846,6 @@ dependencies = [
  "hyper",
  "norepi-site-db-hosts",
  "norepi-site-util",
- "rustls",
  "rustls-pemfile",
  "tls-listener",
  "tokio",
@@ -1326,9 +1325,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97abcaa5d5850d3b469898d1e0939b57c3afb4475122e792cdd1c82b07f5de06"
 dependencies = [
  "futures-util",
+ "hyper",
  "pin-project-lite",
  "thiserror",
  "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]
@@ -1365,6 +1366,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tokio-rustls"
+version = "0.23.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c43ee83903113e03984cb9e5cebe6c04a5116269e900e3ddba8f068a62adda59"
+dependencies = [
+ "rustls",
+ "tokio",
+ "webpki",
 ]
 
 [[package]]

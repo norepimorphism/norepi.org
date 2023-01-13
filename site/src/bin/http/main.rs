@@ -24,7 +24,7 @@ use hyper::{
     StatusCode,
     Uri,
 };
-use tls_listener::TlsListener;
+use tls_listener::rustls::{rustls as rustls, TlsAcceptor};
 
 mod resource;
 
@@ -67,16 +67,18 @@ async fn run() -> Result<(), hyper::Error> {
 }
 
 async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::Error> {
-    let tls = TlsListener::new(
-        rustls::ServerConfig::builder()
-            .with_safe_defaults()
-            .with_no_client_auth()
-            .with_single_cert(tls_certs(), tls_key())
-            .expect("failed to build server configuration"),
-        AddrIncoming::bind(&local_addr),
-    );
+    let local_addr: SocketAddr = (norepi_site_util::bind::PUBLIC_ADDR, 443).into();
 
-    Server::builder(tls)
+    let config = rustls::ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_single_cert(tls_certs(), tls_key())
+        .expect("failed to build server configuration");
+    let acceptor: TlsAcceptor = Arc::new(config).into();
+    let listener = tls_listener::builder(acceptor)
+        .listen(AddrIncoming::bind(&local_addr)?);
+
+    Server::builder(listener)
         .serve(make_service_fn(move |sock| {
             // This closure is invoked for each remote connection, so we need to clone `report` to
             // use it.

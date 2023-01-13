@@ -25,12 +25,11 @@ path = "src/bin/http/main.rs"
 chrono = "0.4"
 csv = "1.1"
 dirs = "4.0"
-hyper = { version = "0.14", features = ["http1", "http2", "server", "tcp", "runtime"] }
+hyper = { version = "0.14", features = ["server", "tcp", "runtime"] }
 norepi-site-db-hosts = { path = "../site-db-hosts" }
 norepi-site-util = { path = "../site-util" }
-rustls = "0.20"
 rustls-pemfile = "1.0"
-tls-listener = "0.6"
+tls-listener = { version = "0.6", features = ["hyper-h1", "hyper-h2", "rustls"] }
 tokio = { version = "1.24", features = ["macros", "rt-multi-thread", "signal"] }
 tracing = "0.1"
 
