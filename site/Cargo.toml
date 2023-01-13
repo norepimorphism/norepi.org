@@ -28,9 +28,10 @@ dirs = "4.0"
 hyper = { version = "0.14", features = ["http1", "http2", "server", "tcp", "runtime"] }
 norepi-site-db-hosts = { path = "../site-db-hosts" }
 norepi-site-util = { path = "../site-util" }
+rustls = "0.20"
 rustls-pemfile = "1.0"
+tls-listener = "0.6"
 tokio = { version = "1.24", features = ["macros", "rt-multi-thread", "signal"] }
-tokio-rustls = "0.23"
 tracing = "0.1"
 
 [build-dependencies]
