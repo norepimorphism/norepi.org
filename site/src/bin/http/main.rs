@@ -101,6 +101,9 @@ fn tls_certs() -> Vec<rustls::Certificate> {
         .expect("failed to read full certificate chain")
         .into_iter()
         .map(rustls::Certificate)
+        .inspect(|cert| {
+            tracing::info!("using cert: {cert:?}");
+        })
         .collect()
 }
 
@@ -110,6 +113,9 @@ fn tls_key() -> rustls::PrivateKey {
         .into_iter()
         .next()
         .map(rustls::PrivateKey)
+        .inspect(|key| {
+            tracing::info!("using private key: {key:?}");
+        })
         .expect("private key is missing")
 }
 
