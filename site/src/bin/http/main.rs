@@ -111,11 +111,11 @@ fn tls_key() -> rustls::PrivateKey {
     rustls_pemfile::pkcs8_private_keys(&mut &*norepi_site::cert::PRIVKEY)
         .expect("failed to read RSA private keys")
         .into_iter()
-        .next()
         .map(rustls::PrivateKey)
         .inspect(|key| {
             tracing::info!("using private key: {key:?}");
         })
+        .next()
         .expect("private key is missing")
 }
 
