@@ -105,12 +105,12 @@ fn tls_certs() -> Vec<rustls::Certificate> {
 }
 
 fn tls_key() -> rustls::PrivateKey {
-    rustls_pemfile::rsa_private_keys(&mut &*norepi_site::cert::PRIVKEY)
+    rustls_pemfile::pkcs8_private_keys(&mut &*norepi_site::cert::PRIVKEY)
         .expect("failed to read RSA private keys")
         .into_iter()
         .next()
         .map(rustls::PrivateKey)
-        .expect("RSA private key is missing")
+        .expect("private key is missing")
 }
 
 fn create_service(
