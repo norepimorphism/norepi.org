@@ -73,7 +73,7 @@ async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::E
         .with_single_cert(tls_certs(), tls_key())
         .expect("failed to build server configuration");
     let tls = tokio_rustls::TlsAcceptor::from(Arc::new(config));
-    let local_addr: SocketAddr = (norepi_site_util::bind::PUBLIC_ADDR, 80).into();
+    let local_addr: SocketAddr = (norepi_site_util::bind::PUBLIC_ADDR, 443).into();
     // TODO: don't unwrap.
     let listener = tokio::net::TcpListener::bind(local_addr).await.unwrap();
     let incoming = AddrIncoming::from_listener(listener)?;
