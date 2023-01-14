@@ -97,7 +97,8 @@ fn create_service(
     Error = http::Error,
     Future = impl Future<Output = Result<Response<Body>, http::Error>>
 > {
-    let remote_addr = todo!();
+    let (stream, _) = stream.get_ref();
+    let remote_addr = stream.remote_addr();
 
     service_fn(move |req| {
         // This closure is invoked for each request, so we need to clone `report` to use it.
