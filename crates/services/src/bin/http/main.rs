@@ -115,8 +115,6 @@ fn handle_request(
     remote_addr: SocketAddr,
     req: Request<Body>,
 ) -> Result<Response<Body>, http::Error> {
-    tracing::trace!("incoming request from {}", remote_addr);
-
     // Acquire the mutex lock.
     let mut report = report.lock().expect("mutex is poisoned");
 

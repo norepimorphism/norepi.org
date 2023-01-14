@@ -68,6 +68,7 @@ impl Accept for Acceptor {
         if let Some(ref mut handshake) = pin.current_handshake {
             let poll = Pin::new(handshake).poll(cx);
             if poll.is_ready() {
+                tracing::trace!("handshake is complete");
                 pin.current_handshake = None;
             }
 
@@ -75,6 +76,12 @@ impl Accept for Acceptor {
         } else {
             match Pin::new(&mut pin.incoming).poll_accept(cx) {
                 Poll::Ready(Some(Ok(stream))) => {
+                    tracing::trace!("incoming request from {}", stream.remote_addr());
+
+                    // Note: this is where, in the future, we will want to deny incoming
+                    // connections from hosts that are so malicious they are not even worth
+                    // handshaking with.
+
                     let accept = tokio_rustls::TlsAcceptor::from(pin.config.clone())
                         .accept(stream);
                     pin.current_handshake = Some(accept);
