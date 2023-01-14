@@ -14,7 +14,6 @@ use std::{
 use hyper::{
     header::{self, HeaderValue},
     http,
-    server::conn::{AddrIncoming, AddrStream},
     service::{make_service_fn, service_fn, Service},
     Body,
     Method,
@@ -68,17 +67,13 @@ async fn run() -> Result<(), hyper::Error> {
 }
 
 async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::Error> {
-    let local_addr: SocketAddr = (norepi_site_util::bind::PUBLIC_ADDR, 443).into();
-    let incoming = AddrIncoming::bind(&local_addr)?;
-
-    Server::builder(tls::Acceptor::new(incoming))
+    Server::builder(tls::Acceptor::bind(443)?)
         .serve(make_service_fn(move |stream: &tls::Stream| {
             // This closure is invoked for each remote connection, so we need to clone `report` to
             // use it.
             let report = Arc::clone(&report);
 
-            let sock = stream.as_ref();
-            let result = Ok::<_, http::Error>(create_service(report, sock));
+            let result = Ok::<_, http::Error>(create_service(report, stream));
 
             async move { result }
         }))
@@ -95,14 +90,14 @@ async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::E
 
 fn create_service(
     report: Arc<Mutex<csv::Writer<fs::File>>>,
-    sock: &AddrStream,
+    stream: &tls::Stream,
 ) -> impl Sync + Service<
     Request<Body>,
     Response = Response<Body>,
     Error = http::Error,
     Future = impl Future<Output = Result<Response<Body>, http::Error>>
 > {
-    let remote_addr = sock.remote_addr();
+    let remote_addr = todo!();
 
     service_fn(move |req| {
         // This closure is invoked for each request, so we need to clone `report` to use it.

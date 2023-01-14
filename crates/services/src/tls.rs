@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{future::Future as _, io, pin::Pin, sync::Arc, task::{self, Poll}};
+use std::{future::Future, io, pin::Pin, sync::Arc, task::{self, Poll}};
 
 use hyper::server::{accept::Accept, conn::{AddrIncoming, AddrStream}};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::rustls as rustls;
 
 impl Acceptor {
-    pub fn new(incoming: AddrIncoming) -> Self {
+    pub fn bind(port: u16) -> hyper::Result<Self> {
+        let addr = (norepi_site_util::bind::PUBLIC_ADDR, port).into();
+
+        AddrIncoming::bind(&addr).map(Self::new)
+    }
+
+    fn new(incoming: AddrIncoming) -> Self {
         Self {
             config: Arc::new(config()),
             incoming,
@@ -58,17 +64,12 @@ impl Accept for Acceptor {
     ) -> Poll<Option<Result<Self::Conn, Self::Error>>> {
         let pin = self.get_mut();
 
-        match Pin::new(&mut pin.incoming).poll_accept(cx) {
-            Poll::Ready(Some(result)) => {
-                Poll::Ready(Some(result.map(|sock| {
-                    let accept = tokio_rustls::TlsAcceptor::from(pin.config.clone()).accept(sock);
+        Pin::new(&mut pin.incoming).poll_accept(cx).map_ok(|stream| {
+            let accept = tokio_rustls::TlsAcceptor::from(pin.config.clone())
+                .accept(stream);
 
-                    Stream { state: StreamState::Handshaking(accept) }
-                })))
-            }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        }
+            Stream { state: StreamState::Handshaking(accept) }
+        })
     }
 }
 
@@ -79,15 +80,6 @@ pub struct Stream {
 enum StreamState {
     Handshaking(tokio_rustls::Accept<AddrStream>),
     Streaming(tokio_rustls::server::TlsStream<AddrStream>),
-}
-
-impl AsRef<AddrStream> for Stream {
-    fn as_ref(&self) -> &AddrStream {
-        match self.state {
-            StreamState::Handshaking(ref accept) => accept.get_ref().unwrap(),
-            StreamState::Streaming(ref stream) => stream.get_ref().0,
-        }
-    }
 }
 
 impl AsyncRead for Stream {
