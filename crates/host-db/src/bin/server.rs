@@ -14,7 +14,7 @@ fn main() -> std::process::ExitCode {
     }
 
     norepi_site_util::run(|| {
-        let mut server = norepi_site_db_hosts::Server::open("ipv4.db")
+        let mut server = norepi_site_host_db::Server::open("ipv4.db")
             .change_context(Error::Open)?;
 
         let should_quit = Arc::new(AtomicBool::new(false));

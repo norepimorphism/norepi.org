@@ -24,8 +24,8 @@ use hyper::{
     StatusCode,
     Uri,
 };
-use tls_listener::rustls::rustls as rustls;
-use tls_listener::rustls::{server::TlsStream, TlsAcceptor};
+
+use norepi_site_services::tls;
 
 mod resource;
 
@@ -69,23 +69,15 @@ async fn run() -> Result<(), hyper::Error> {
 
 async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::Error> {
     let local_addr: SocketAddr = (norepi_site_util::bind::PUBLIC_ADDR, 443).into();
+    let incoming = AddrIncoming::bind(&local_addr)?;
 
-    let config = rustls::ServerConfig::builder()
-        .with_safe_defaults()
-        .with_no_client_auth()
-        .with_single_cert(tls_certs(), tls_key())
-        .expect("failed to build server configuration");
-    let acceptor: TlsAcceptor = Arc::new(config).into();
-    let listener = tls_listener::builder(acceptor)
-        .listen(AddrIncoming::bind(&local_addr)?);
-
-    Server::builder(listener)
-        .serve(make_service_fn(move |stream: &TlsStream<AddrStream>| {
+    Server::builder(tls::Acceptor::new(incoming))
+        .serve(make_service_fn(move |stream: &tls::Stream| {
             // This closure is invoked for each remote connection, so we need to clone `report` to
             // use it.
             let report = Arc::clone(&report);
 
-            let (sock, _) = stream.get_ref();
+            let sock = stream.as_ref();
             let result = Ok::<_, http::Error>(create_service(report, sock));
 
             async move { result }
@@ -99,23 +91,6 @@ async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::E
         .unwrap();
 
     Ok(())
-}
-
-fn tls_certs() -> Vec<rustls::Certificate> {
-    rustls_pemfile::certs(&mut &*norepi_site::cert::FULLCHAIN)
-        .expect("failed to read full certificate chain")
-        .into_iter()
-        .map(rustls::Certificate)
-        .collect()
-}
-
-fn tls_key() -> rustls::PrivateKey {
-    rustls_pemfile::pkcs8_private_keys(&mut &*norepi_site::cert::PRIVKEY)
-        .expect("failed to read RSA private keys")
-        .into_iter()
-        .map(rustls::PrivateKey)
-        .next()
-        .expect("private key is missing")
 }
 
 fn create_service(
@@ -170,13 +145,13 @@ fn handle_request(
     drop(report);
 
     let remote_ip = remote_addr.ip();
-    match norepi_site_db_hosts::client::get_host(remote_ip) {
+    match norepi_site_host_db::client::get_host(remote_ip) {
         Ok(response) => {
             let is_blocked = match response {
-                norepi_site_db_hosts::client::GetHostResponse::Found(host) => host.is_blocked(),
-                norepi_site_db_hosts::client::GetHostResponse::NotFound => {
+                norepi_site_host_db::client::GetHostResponse::Found(host) => host.is_blocked(),
+                norepi_site_host_db::client::GetHostResponse::NotFound => {
                     // Make a new entry for this host.
-                    if let Err(e) = norepi_site_db_hosts::client::set_host(
+                    if let Err(e) = norepi_site_host_db::client::set_host(
                         remote_ip,
                         Default::default(),
                     ) {

@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Custom data types for use in a database.
-
 use std::ops::Add;
 
 pub type UtcDateTime = chrono::DateTime<chrono::Utc>;

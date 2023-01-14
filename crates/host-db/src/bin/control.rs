@@ -5,7 +5,7 @@
 use std::{env, net::IpAddr, process};
 
 use error_stack::{IntoReport as _, Result, ResultExt as _};
-use norepi_site_db_hosts::client;
+use norepi_site_host_db::client;
 
 fn main() -> process::ExitCode {
     norepi_site_util::run(main_impl)

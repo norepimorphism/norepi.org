@@ -60,9 +60,8 @@ fn try_setup_tracing() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     EnvFilter::default()
                 }
             }
-            // *hyper* is very noisy.
+            // These crates are very noisy.
             .add_directive("hyper=error".parse()?)
-            // We don't need to hear from *mio* either.
             .add_directive("mio=error".parse()?)
             .add_directive("rustls=error".parse()?)
         })

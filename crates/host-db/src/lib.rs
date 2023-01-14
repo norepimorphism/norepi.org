@@ -5,12 +5,13 @@
 #![feature(generic_const_exprs, mem_copy_fn, nonzero_min_max, slice_as_chunks, unchecked_math)]
 
 use bitflags::bitflags;
-use norepi_site_db_types::{Duration, Timestamp};
 
 pub use server::Server;
+pub use time::{Duration, Timestamp};
 
 pub mod client;
 pub mod server;
+pub mod time;
 mod wire;
 
 static SOCKET_NAME: &str = "/tmp/site-db-hosts";
