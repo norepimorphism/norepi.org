@@ -16,7 +16,6 @@ impl Acceptor {
         Self {
             config: Arc::new(config()),
             incoming,
-            current_handshake: None,
         }
     }
 }
@@ -52,7 +51,6 @@ fn private_key() -> rustls::PrivateKey {
 pub struct Acceptor {
     config: Arc<rustls::ServerConfig>,
     incoming: AddrIncoming,
-    current_handshake: Option<tokio_rustls::Accept<AddrStream>>,
 }
 
 impl Accept for Acceptor {
@@ -65,33 +63,25 @@ impl Accept for Acceptor {
     ) -> Poll<Option<Result<Self::Conn, Self::Error>>> {
         let pin = self.get_mut();
 
-        if let Some(ref mut handshake) = pin.current_handshake {
-            let poll = Pin::new(handshake).poll(cx);
-            if poll.is_ready() {
-                tracing::trace!("handshake is complete");
-                pin.current_handshake = None;
+        match Pin::new(&mut pin.incoming).poll_accept(cx) {
+            Poll::Ready(Some(Ok(stream))) => {
+                tracing::trace!("incoming request from {}", stream.remote_addr());
+
+                // Note: this is where, in the future, we will want to deny incoming
+                // connections from hosts that are so malicious they are not even worth
+                // handshaking with.
+
+                let handshake = tokio_rustls::TlsAcceptor::from(pin.config.clone())
+                    .accept(stream);
+                // FIXME: should we be blocking here?
+                let result = tokio::runtime::Handle::current()
+                    .block_on(handshake);
+
+                Poll::Ready(Some(result))
             }
-
-            poll.map(Some)
-        } else {
-            match Pin::new(&mut pin.incoming).poll_accept(cx) {
-                Poll::Ready(Some(Ok(stream))) => {
-                    tracing::trace!("incoming request from {}", stream.remote_addr());
-
-                    // Note: this is where, in the future, we will want to deny incoming
-                    // connections from hosts that are so malicious they are not even worth
-                    // handshaking with.
-
-                    let accept = tokio_rustls::TlsAcceptor::from(pin.config.clone())
-                        .accept(stream);
-                    pin.current_handshake = Some(accept);
-
-                    Poll::Pending
-                }
-                Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-                Poll::Ready(None) => Poll::Ready(None),
-                Poll::Pending => Poll::Pending,
-            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
         }
     }
 }

@@ -38,7 +38,7 @@ async fn main() -> std::process::ExitCode {
     norepi_site_util::run_async(run).await
 }
 
-async fn run() -> Result<(), hyper::Error> {
+async fn run() -> hyper::Result<()> {
     let mut report = fs::OpenOptions::new()
         .write(true)
         .append(true)
@@ -66,7 +66,7 @@ async fn run() -> Result<(), hyper::Error> {
     Ok(())
 }
 
-async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::Error> {
+async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> hyper::Result<()> {
     Server::builder(tls::Acceptor::bind(443)?)
         .serve(make_service_fn(move |stream: &tls::Stream| {
             // This closure is invoked for each remote connection, so we need to clone `report` to
@@ -82,8 +82,7 @@ async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> Result<(), hyper::E
                 .await
                 .expect("failed to install shutdown signal handler")
         })
-        .await
-        .unwrap();
+        .await?;
 
     Ok(())
 }
