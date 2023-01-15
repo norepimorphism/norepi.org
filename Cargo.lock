@@ -849,6 +849,7 @@ dependencies = [
  "chrono",
  "csv",
  "dirs",
+ "error-stack",
  "generate-norepi-site",
  "hyper",
  "hyper-rustls",
@@ -864,6 +865,7 @@ dependencies = [
 name = "norepi-site-util"
 version = "0.1.0"
 dependencies = [
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1356,19 +1358,7 @@ dependencies = [
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
- "tokio-macros",
  "windows-sys",
-]
-
-[[package]]
-name = "tokio-macros"
-version = "1.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d266c00fde287f55d3f1c3e96c500c362a2b8c695076ec180f27918820bc6df8"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

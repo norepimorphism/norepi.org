@@ -10,14 +10,19 @@ pub fn run<E: fmt::Display>(serve: impl FnOnce() -> Result<(), E>) -> process::E
     handle_serve(serve())
 }
 
-pub async fn run_async<E, O>(serve: impl FnOnce() -> O) -> process::ExitCode
+pub fn run_async<E, O>(serve: impl FnOnce() -> O) -> process::ExitCode
 where
     E: fmt::Display,
     O: Future<Output = Result<(), E>>,
 {
     prologue();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_io()
+        .build()
+        .expect("failed to build tokio runtime");
+    let result = runtime.block_on(serve());
 
-    handle_serve(serve().await)
+    handle_serve(result)
 }
 
 fn prologue() {

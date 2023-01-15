@@ -25,12 +25,13 @@ path = "src/bin/http/main.rs"
 chrono = "0.4"
 csv = "1.1"
 dirs = "4.0"
+error-stack = "0.2"
 hyper = { version = "0.14", features = ["server", "tcp", "runtime"] }
 hyper-rustls = "0.23"
 norepi-site-host-db = { path = "../host-db" }
 norepi-site-util = { path = "../util" }
 rustls-pemfile = "1.0"
-tokio = { version = "1.24", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1.24", features = ["signal"] }
 tokio-rustls = "0.23"
 tracing = "0.1"
 

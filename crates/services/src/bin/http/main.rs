@@ -33,9 +33,8 @@ static SERVER: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSI
 /// The *Allow* header of a response to a successful `OPTIONS` request.
 static ALLOW: &str = "GET, HEAD, OPTIONS";
 
-#[tokio::main]
-async fn main() -> std::process::ExitCode {
-    norepi_site_util::run_async(run).await
+fn main() -> std::process::ExitCode {
+    norepi_site_util::run_async(run)
 }
 
 async fn run() -> hyper::Result<()> {

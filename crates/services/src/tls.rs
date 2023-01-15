@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{future::Future, io, pin::Pin, sync::Arc, task::{self, Poll}};
+use std::{fmt, future::Future, io, pin::Pin, sync::Arc, task::{self, Poll}};
 
 use hyper::server::{accept::Accept, conn::{AddrIncoming, AddrStream}};
 use tokio_rustls::rustls as rustls;
 
 impl Acceptor {
     pub fn bind(port: u16) -> hyper::Result<Self> {
-        let addr = (norepi_site_util::bind::PUBLIC_ADDR, port).into();
+        let addr = (norepi_site_util::bind::PRIVATE_ADDR, port).into();
 
         AddrIncoming::bind(&addr).map(Self::new)
     }
@@ -16,6 +16,7 @@ impl Acceptor {
         Self {
             config: Arc::new(config()),
             incoming,
+            current_handshake: None,
         }
     }
 }
@@ -51,6 +52,7 @@ fn private_key() -> rustls::PrivateKey {
 pub struct Acceptor {
     config: Arc<rustls::ServerConfig>,
     incoming: AddrIncoming,
+    current_handshake: Option<tokio_rustls::Accept<AddrStream>>,
 }
 
 impl Accept for Acceptor {
@@ -63,25 +65,60 @@ impl Accept for Acceptor {
     ) -> Poll<Option<Result<Self::Conn, Self::Error>>> {
         let pin = self.get_mut();
 
-        match Pin::new(&mut pin.incoming).poll_accept(cx) {
-            Poll::Ready(Some(Ok(stream))) => {
-                tracing::trace!("incoming request from {}", stream.remote_addr());
+        if let Some(ref mut handshake) = pin.current_handshake {
+            match Pin::new(handshake).poll(cx) {
+                Poll::Ready(result) => {
+                    pin.current_handshake = None;
 
-                // Note: this is where, in the future, we will want to deny incoming
-                // connections from hosts that are so malicious they are not even worth
-                // handshaking with.
+                    match result {
+                        Ok(stream) => {
+                            tracing::trace!("TLS handshake is complete");
 
-                let handshake = tokio_rustls::TlsAcceptor::from(pin.config.clone())
-                    .accept(stream);
-                // FIXME: should we be blocking here?
-                let result = tokio::runtime::Handle::current()
-                    .block_on(handshake);
+                            Poll::Ready(Some(Ok(stream)))
+                        }
+                        Err(e) => {
+                            #[derive(Debug)]
+                            struct Error;
 
-                Poll::Ready(Some(result))
+                            impl std::error::Error for Error {}
+                            impl fmt::Display for Error {
+                                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                                    f.write_str("TLS handshake failed")
+                                }
+                            }
+
+                            tracing::error!(
+                                "{:?}",
+                                error_stack::Report::new(e).change_context(Error),
+                            );
+                            cx.waker().wake_by_ref();
+
+                            Poll::Pending
+                        }
+                    }
+                }
+                _ => Poll::Pending,
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+        } else {
+            match Pin::new(&mut pin.incoming).poll_accept(cx) {
+                Poll::Ready(Some(Ok(stream))) => {
+                    tracing::trace!("incoming request from {}", stream.remote_addr());
+
+                    // Note: this is where, in the future, we will want to deny incoming
+                    // connections from hosts that are so malicious they are not even worth
+                    // handshaking with.
+
+                    let handshake = tokio_rustls::TlsAcceptor::from(pin.config.clone())
+                        .accept(stream);
+                    pin.current_handshake = Some(handshake);
+                    cx.waker().wake_by_ref();
+
+                    Poll::Pending
+                }
+                Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            }
         }
     }
 }
