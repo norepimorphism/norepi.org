@@ -7,9 +7,7 @@ use tokio_rustls::rustls as rustls;
 
 impl Acceptor {
     pub fn bind(port: u16) -> hyper::Result<Self> {
-        let addr = (norepi_site_util::bind::PUBLIC_ADDR, port).into();
-
-        AddrIncoming::bind(&addr).map(Self::new)
+        crate::sock::bind(port).map(Self::new)
     }
 
     fn new(incoming: AddrIncoming) -> Self {

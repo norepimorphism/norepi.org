@@ -2,8 +2,6 @@
 
 use std::{fmt, future::Future, process};
 
-pub mod bind;
-
 pub fn run<E: fmt::Display>(serve: impl FnOnce() -> Result<(), E>) -> process::ExitCode {
     prologue();
 

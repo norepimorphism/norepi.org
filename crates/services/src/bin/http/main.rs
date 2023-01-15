@@ -14,6 +14,7 @@ use std::{
 use hyper::{
     header::{self, HeaderValue},
     http,
+    server::conn::AddrStream,
     service::{make_service_fn, service_fn, Service},
     Body,
     Method,
@@ -23,8 +24,6 @@ use hyper::{
     StatusCode,
     Uri,
 };
-
-use norepi_site_services::tls;
 
 mod resource;
 
@@ -53,7 +52,18 @@ async fn run() -> hyper::Result<()> {
 
     let report = csv::Writer::from_writer(report);
     let report = Arc::new(Mutex::new(report));
-    serve(Arc::clone(&report)).await?;
+    tokio::try_join!(
+        serve(
+            Arc::clone(&report),
+            norepi_site_services::sock::bind(80)?,
+            |stream| stream,
+        ),
+        serve(
+            Arc::clone(&report),
+            norepi_site_services::tls::Acceptor::bind(443)?,
+            |stream| stream.get_ref().0,
+        ),
+    )?;
 
     Arc::try_unwrap(report)
         .expect("Arc has other references")
@@ -65,13 +75,23 @@ async fn run() -> hyper::Result<()> {
     Ok(())
 }
 
-async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> hyper::Result<()> {
-    Server::builder(tls::Acceptor::bind(443)?)
-        .serve(make_service_fn(move |stream: &tls::Stream| {
+async fn serve<I>(
+    report: Arc<Mutex<csv::Writer<fs::File>>>,
+    incoming: I,
+    get_addr_stream: impl Fn(&I::Conn) -> &AddrStream,
+) -> hyper::Result<()>
+where
+    I: hyper::server::accept::Accept,
+    I::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    I::Conn: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    Server::builder(incoming)
+        .serve(make_service_fn(move |stream: &I::Conn| {
             // This closure is invoked for each remote connection, so we need to clone `report` to
             // use it.
             let report = Arc::clone(&report);
 
+            let stream = get_addr_stream(stream);
             let result = Ok::<_, http::Error>(create_service(report, stream));
 
             async move { result }
@@ -88,14 +108,13 @@ async fn serve(report: Arc<Mutex<csv::Writer<fs::File>>>) -> hyper::Result<()> {
 
 fn create_service(
     report: Arc<Mutex<csv::Writer<fs::File>>>,
-    stream: &tls::Stream,
+    stream: &AddrStream,
 ) -> impl Sync + Service<
     Request<Body>,
     Response = Response<Body>,
     Error = http::Error,
     Future = impl Future<Output = Result<Response<Body>, http::Error>>
 > {
-    let (stream, _) = stream.get_ref();
     let remote_addr = stream.remote_addr();
 
     service_fn(move |req| {
