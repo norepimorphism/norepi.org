@@ -331,6 +331,27 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
     //
     // See <https://httpwg.org/specs/rfc9110.html#rfc.section.10.2.4>.
     headers.insert(header::SERVER, HeaderValue::from_static(SERVER));
+    // RFC 6797, Section 6.1:
+    //   The Strict-Transport-Security HTTP response header (STS header field) indicates to a UA
+    //   that it MUST enforce the HSTS Policy in regards to the host emitting the response message
+    //   containing this header field.
+    //
+    // See <https://www.rfc-editor.org/rfc/rfc6797#section-6.1>.
+
+    // Note: it's OK that we serve this header over both HTTP and HTTPS. Browsers will probably
+    // ignore this header when it is sent over plain HTTP, though.
+    headers.insert(
+        header::STRICT_TRANSPORT_SECURITY,
+        HeaderValue::from_static(
+            // RFC 6797, Section 6.1.1:
+            //   The REQUIRED "max-age" directive specifies the number of seconds, after the
+            //   reception of the STS header field, during which the UA regards the host (from whom
+            //   the message was received) as a Known HSTS Host.
+
+            // FIXME: we will want to bump this up over time. The recommended end goal is two years.
+            "max-age=300",
+        ),
+    );
 
     Ok(response)
 }
