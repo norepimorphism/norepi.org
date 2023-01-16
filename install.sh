@@ -5,7 +5,7 @@ install_crate() {
 }
 
 install_service() {
-    sudo ln -s "${HOME}/.cargo/bin/${1}" "/usr/local/bin/${1}"
+    sudo ln -sf "${HOME}/.cargo/bin/${1}" "/usr/local/bin/${1}"
     sudo cp "systemd/${1}.service" "/etc/systemd/system/${1}.service"
     sudo systemctl enable "${1}.service"
 }
