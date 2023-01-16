@@ -1,7 +1,8 @@
 #!/bin/sh
 
 install_crate() {
-    sudo `which cargo` install --root /usr/local/bin --path "crates/${1}"
+    sudo "RUSTUP_HOME=${RUSTUP_HOME}" \
+        `which cargo` install --root /usr/local/bin --path "crates/${1}"
 }
 
 install_service() {
