@@ -1,0 +1,12 @@
+[Unit]
+Description=Norepi's HTTP(S) Server
+After=network.target
+After=norepi-hosts-server.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/norepi-httpd
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

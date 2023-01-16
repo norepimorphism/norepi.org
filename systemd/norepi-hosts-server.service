@@ -1,0 +1,10 @@
+[Unit]
+Description=Norepi's Host Database Server
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/norepi-hosts-server
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
