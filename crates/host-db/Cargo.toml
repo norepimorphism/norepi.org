@@ -10,11 +10,11 @@ license = "MPL-2.0"
 path = "src/lib.rs"
 
 [[bin]]
-name = "server"
+name = "norepi-hosts-server"
 path = "src/bin/server.rs"
 
 [[bin]]
-name = "control"
+name = "norepi-hosts-control"
 path = "src/bin/control.rs"
 
 [dependencies]
