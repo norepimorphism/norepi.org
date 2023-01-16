@@ -5,6 +5,7 @@ Description=Norepi's Host Database Server
 Type=simple
 ExecStart=/usr/local/bin/norepi-hosts-server
 Restart=on-failure
+Environment=RUST_LOG=debug
 
 [Install]
 WantedBy=multi-user.target

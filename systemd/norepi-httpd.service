@@ -7,6 +7,7 @@ After=norepi-hosts-server.service
 Type=simple
 ExecStart=/usr/local/bin/norepi-httpd
 Restart=on-failure
+Environment=RUST_LOG=debug
 
 [Install]
 WantedBy=multi-user.target
