@@ -1,13 +1,12 @@
 #!/bin/sh
 
 install_crate() {
-    sudo "RUSTUP_HOME=${HOME}/.rustup" \
-        `which cargo` install --root /usr/local/bin --path "crates/${1}"
+    sudo -E cargo install --root /usr/local/bin --path "crates/${1}"
 }
 
 install_service() {
     sudo cp "systemd/${1}.service" "/etc/systemd/system/${1}.service"
-    systemctl enable "${1}.service"
+    sudo systemctl enable "${1}.service"
 }
 
 install_crate host-db
