@@ -388,10 +388,9 @@ impl Protocol for Https {
         //   message containing this header field.
         //
         // See <https://www.rfc-editor.org/rfc/rfc6797#section-6.1>.
-
         headers.insert(
             header::STRICT_TRANSPORT_SECURITY,
-            HeaderValue::from_static(
+            HeaderValue::from_static(concat!(
                 // RFC 6797, Section 6.1.1:
                 //   The REQUIRED "max-age" directive specifies the number of seconds, after the
                 //   reception of the STS header field, during which the UA regards the host (from
@@ -399,8 +398,16 @@ impl Protocol for Https {
 
                 // FIXME: we will want to bump this up over time. The recommended end goal is two
                 //  years.
-                "max-age=300",
-            ),
+                "max-age=604800;",
+                // RFC 6797, Section 6.1.2:
+                //   The OPTIONAL "includeSubDomains" directive is a valueless directive which, if
+                //   present (i.e., it is "asserted"), signals the UA that the HSTS policy applies
+                //   applies to this HSTS host as well as any subdomains of the host's domain name.
+
+                // Note: while technically made optional by the standard, this directive is a
+                // prerequisite for HSTS preloading.
+                "includeSubDomains",
+            )),
         );
 
         Ok(response)
