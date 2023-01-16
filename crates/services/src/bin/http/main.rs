@@ -337,13 +337,18 @@ fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
 
 fn target_is_malicious(uri: &Uri) -> bool {
     let path = uri.path();
-    if path == "/boaform/admin/formLogin" {
+    if matches!(
+        path,
+        "/boaform/admin/formLogin"
+        // This is a honeypot.
+        | "/you-may-be-banned-if-you-access-this-resource",
+    ) {
         return true;
     }
 
     let mut components = path.rsplit('/');
     if let Some(filename) = components.next() {
-        if matches!(filename, "wlwmanifest.xml" | ".env") {
+        if matches!(filename, ".env") {
             return true;
         }
     }
