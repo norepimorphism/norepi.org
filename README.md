@@ -4,18 +4,12 @@
 
 ## Background
 
-*norepi.org* refers to a collection of [fully-qualified domain names](https://en.wikipedia.org/wiki/Fully_qualified_domain_name) registered to and operated by *norepimorphism*, including the subdomains [*www.norepi.org*](https://www.norepi.org) and [*mail.norepi.org*](https://mail.norepi.org), as well as [*norepi.org*](https://norepi.org) itself. Each domain serves one or more services over TCP.
+The *norepi.org* domain offers multiple TCP services.
 
 This repository hosts the source code for each service.
 
 ## Services
 
-### [*norepi.org*](https://norepi.org)
+### Webserver
 
-### [*www.norepi.org*](https://www.norepi.org)
-
-The canonical HTTPS webserver.
-
-### [*mail.norepi.org*](https://mail.norepi.org)
-
-The canonical SMTP mailserver.
+*norepimorphism*'s personal website is served over TCP ports 80 and 443 for HTTP and HTTPS, respectively.
