@@ -14,7 +14,7 @@ pub mod server;
 pub mod time;
 mod wire;
 
-static SOCKET_NAME: &str = "/tmp/site-db-hosts";
+static SOCKET_NAME: &str = "@norepi-site-host-db";
 
 impl Host {
     pub fn new() -> Self {
