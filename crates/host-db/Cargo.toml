@@ -24,12 +24,12 @@ bytemuck = { version = "1.12", features = ["derive"] }
 chrono = "0.4"
 const_panic = "0.2"
 ctrlc = "3.2"
-dirs = "4.0"
-error-stack = "0.2"
+dirs = { workspace = true }
+error-stack = { workspace = true }
 interprocess = "1.2"
 memmap2 = "0.5"
 norepi-site-util = { path = "../util" }
 serde = { version = "1.0", features = ["derive"] }
 smallvec = "1.10"
 thiserror = "1.0"
-tracing = "0.1"
+tracing = { workspace = true }

@@ -7,6 +7,6 @@ edition = "2021"
 license = "MPL-2.0"
 
 [dependencies]
-tokio = { version = "1.24", features = ["rt-multi-thread"] }
-tracing = "0.1"
+tokio = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

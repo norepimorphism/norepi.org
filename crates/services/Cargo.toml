@@ -24,16 +24,16 @@ path = "src/bin/http/main.rs"
 [dependencies]
 chrono = "0.4"
 csv = "1.1"
-dirs = "4.0"
-error-stack = "0.2"
+dirs = { workspace = true }
+error-stack = { workspace = true }
 hyper = { version = "0.14", features = ["server", "tcp", "runtime"] }
 hyper-rustls = "0.23"
 norepi-site-host-db = { path = "../host-db" }
 norepi-site-util = { path = "../util" }
 rustls-pemfile = "1.0"
-tokio = { version = "1.24", features = ["macros", "signal"] }
+tokio = { workspace = true }
 tokio-rustls = "0.23"
-tracing = "0.1"
+tracing = { workspace = true }
 
 [build-dependencies]
 generate-norepi-site = { git = "https://github.com/norepimorphism/generate-norepi-site.git" }
