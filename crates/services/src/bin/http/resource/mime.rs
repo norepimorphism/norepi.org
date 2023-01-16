@@ -5,6 +5,7 @@ macro_rules! from_file_ext {
     ("bin") => { $crate::resource::mime::BINARY };
     ("css") => { $crate::resource::mime::CSS };
     ("html") => { $crate::resource::mime::HTML };
+    ("png") => { $crate::resource::mime::PNG };
     ("txt") => { $crate::resource::mime::PLAINTEXT };
 }
 pub(crate) use from_file_ext;
@@ -15,5 +16,7 @@ pub static BINARY: &str = "application/octet-stream";
 pub static CSS: &str = "text/css";
 /// The `text/html` MIME type.
 pub static HTML: &str = "text/html";
+/// The `image/png` MIME type.
+pub static PNG: &str = "image/png";
 /// The `text/plain` MIME type.
 pub static PLAINTEXT: &str = "text/plain";

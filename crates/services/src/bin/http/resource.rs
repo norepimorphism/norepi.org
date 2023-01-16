@@ -254,7 +254,7 @@ impl Resource {
             //   selecting the representation for this response.
             //
             // See <https://httpwg.org/specs/rfc9110.html#rfc.section.12.5.5>.
-            .header(header::VARY, "accept-charset, accept-encoding, accept-language");
+            .header(header::VARY, "accept-charset,accept-encoding,accept-language");
         if let Some(encoding) = self.encoding {
             // RFC 9110, Section 8.4:
             //   The "Content-Encoding" header field indicates what content codings have been

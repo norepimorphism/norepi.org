@@ -436,6 +436,7 @@ fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
         "/robots.txt" => resource::include_!("robots"."txt"),
         "/base.css" => resource::include_gen!("base"."css"),
         "/error.css" => resource::include_gen!("error"."css"),
+        "/favicon.ico" => resource::include_!("favicon"."png"),
         "/" => resource::include_gen!("index"."html"),
         "/contact" => resource::include_gen!("contact"."html"),
         "/noctane" => resource::include_gen!("noctane"."html"),
