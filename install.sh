@@ -1,10 +1,11 @@
 #!/bin/sh
 
 install_crate() {
-    sudo -E cargo install --root /usr/local/bin --path "crates/${1}"
+    cargo install --path "crates/${1}"
 }
 
 install_service() {
+    sudo ln -s "${HOME}/.cargo/bin/${1}" "/usr/local/bin/${1}"
     sudo cp "systemd/${1}.service" "/etc/systemd/system/${1}.service"
     sudo systemctl enable "${1}.service"
 }
