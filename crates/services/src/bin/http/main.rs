@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-#![feature(byte_slice_trim_ascii, ip)]
+#![feature(associated_type_bounds, byte_slice_trim_ascii, ip)]
 
 use std::{
     env,
@@ -14,7 +14,7 @@ use std::{
 use hyper::{
     header::{self, HeaderValue},
     http,
-    server::conn::AddrStream,
+    server::{accept::Accept, conn::{AddrIncoming, AddrStream}},
     service::{make_service_fn, service_fn, Service},
     Body,
     Method,
@@ -24,6 +24,7 @@ use hyper::{
     StatusCode,
     Uri,
 };
+use tokio::io::{AsyncRead, AsyncWrite};
 
 mod resource;
 
@@ -53,16 +54,8 @@ async fn run() -> hyper::Result<()> {
     let report = csv::Writer::from_writer(report);
     let report = Arc::new(Mutex::new(report));
     tokio::try_join!(
-        serve(
-            Arc::clone(&report),
-            norepi_site_services::sock::bind(80)?,
-            |stream| stream,
-        ),
-        serve(
-            Arc::clone(&report),
-            norepi_site_services::tls::Acceptor::bind(443)?,
-            |stream| stream.get_ref().0,
-        ),
+        serve::<Http>(Arc::clone(&report)),
+        serve::<Https>(Arc::clone(&report)),
     )?;
 
     Arc::try_unwrap(report)
@@ -75,24 +68,29 @@ async fn run() -> hyper::Result<()> {
     Ok(())
 }
 
-async fn serve<I>(
-    report: Arc<Mutex<csv::Writer<fs::File>>>,
-    incoming: I,
-    get_addr_stream: impl Fn(&I::Conn) -> &AddrStream,
-) -> hyper::Result<()>
+trait Protocol: 'static {
+    type Incoming: Accept;
+
+    fn incoming() -> hyper::Result<Self::Incoming>;
+
+    fn addr_stream(stream: &<Self::Incoming as Accept>::Conn) -> &AddrStream;
+
+    fn respond_to_request(req: Request<Body>) -> Result<Response<Body>, http::Error>;
+}
+
+async fn serve<P: Protocol>(report: Arc<Mutex<csv::Writer<fs::File>>>) -> hyper::Result<()>
 where
-    I: hyper::server::accept::Accept,
-    I::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    I::Conn: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    <P::Incoming as Accept>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    <P::Incoming as Accept>::Conn: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    Server::builder(incoming)
-        .serve(make_service_fn(move |stream: &I::Conn| {
+    Server::builder(P::incoming()?)
+        .serve(make_service_fn(move |stream| {
             // This closure is invoked for each remote connection, so we need to clone `report` to
             // use it.
             let report = Arc::clone(&report);
 
-            let stream = get_addr_stream(stream);
-            let result = Ok::<_, http::Error>(create_service(report, stream));
+            let stream = P::addr_stream(stream);
+            let result = Ok::<_, http::Error>(create_service::<P>(report, stream));
 
             async move { result }
         }))
@@ -106,7 +104,7 @@ where
     Ok(())
 }
 
-fn create_service(
+fn create_service<P: Protocol>(
     report: Arc<Mutex<csv::Writer<fs::File>>>,
     stream: &AddrStream,
 ) -> impl Sync + Service<
@@ -121,13 +119,13 @@ fn create_service(
         // This closure is invoked for each request, so we need to clone `report` to use it.
         let report = Arc::clone(&report);
 
-        let result = handle_request(report, remote_addr, req);
+        let result = handle_request::<P>(report, remote_addr, req);
 
         async move { result }
     })
 }
 
-fn handle_request(
+fn handle_request<P: Protocol>(
     report: Arc<Mutex<csv::Writer<fs::File>>>,
     remote_addr: SocketAddr,
     req: Request<Body>,
@@ -209,151 +207,204 @@ fn handle_request(
         }
     }
 
-    respond(req)
+    P::respond_to_request(req)
 }
 
-fn respond(req: Request<Body>) -> Result<Response<Body>, http::Error> {
-    // `req.uri()` is really a *request-target* as specified by Section 5.3 of RFC 7230; see
-    // <https://httpwg.org/specs/rfc7230.html#request-target>.
-    let req_target = req.uri();
-    tracing::debug!("{} {}", req.method(), req_target);
+struct Http;
 
-    if target_is_malicious(req_target) {
-        tracing::warn!("request is probably malicious");
+impl Protocol for Http {
+    type Incoming = AddrIncoming;
 
-        // TODO: in the future, this may incur a suspension or ban.
-        return Response::builder().status(StatusCode::IM_A_TEAPOT).body(Body::empty());
+    fn incoming() -> hyper::Result<Self::Incoming> {
+        norepi_site_services::sock::bind(80)
     }
 
-    let mut response = match req.method() {
-        // RFC 9110, Section 9.3.1:
-        //   The GET method request transfer of a current selected representation for the target
-        //   resource.
-        //
-        // See <https://httpwg.org/specs/rfc9110.html#rfc.section.9.3.1>.
-        &Method::GET => get(&req),
-        // RFC 9110, Section 9.3.2:
-        //   The HEAD method is identical to GET except that the server MUST NOT send content in the
-        //   response.
-        //   ...
-        //   The server SHOULD send the same header fields in response to a HEAD request as it would
-        //   have sent if the request method had been GET. However, a server MAY omit header fields
-        //   for which a value is determined only while generating the content.
-        //   ...
-        //   ...a response to GET might contain Content-Length and Vary fields, for example, that
-        //   are not generated within a HEAD response. These minor inconsistencies are considered
-        //   preferable to generating and discarding the content for a HEAD request, since HEAD is
-        //   usually requested for the sake of efficiency.
-        //
-        // See <https://httpwg.org/specs/rfc9110.html#rfc.section.9.3.2>.
-        &Method::HEAD => {
-            // TODO: Our approach is to generate a GET response and discard the body and irrelevant
-            // fields, though RFC 9110 indicates that this is not preferred. Is there a significant
-            // performance cost to doing this?
-            get(&req).map(|mut response| {
-                // Discard the body.
-                *response.body_mut() = Body::empty();
-                // TODO: Maybe discard *Content-Length* as well?
+    fn addr_stream(stream: &<Self::Incoming as hyper::server::accept::Accept>::Conn) -> &AddrStream {
+        stream
+    }
 
-                response
-            })
+    fn respond_to_request(_req: Request<Body>) -> Result<Response<Body>, http::Error> {
+        // Redirect to HTTPS.
+        Response::builder()
+            // RFC 9110, Section 15.4.2:
+            //   The 301 (Moved Permanently) status code indicates that the target resource has been
+            //   assigned a new permanent URI and any future references to this resource ought to
+            //   use one of the enclosed URIs. The server is suggesting that a user agent with link-
+            //   editing capability can permanently replace references to the target URI with one of
+            //   the new references sent by the server.
+            //
+            //   The server SHOULD generate a Location header field in the response containing a
+            //   preferred URI reference for the new permanent URI. The user agent MAY use the
+            //   Location field for automatic redirection.
+            //
+            //   Note: For historical reasons, a user agent MAY change the request method from POST
+            //   to GET for the subsequent request.
+
+            // FIXME: if the UA sends a POST request next, should we allow them access to the site?
+            // It would be nice (though not necessary) to support old browsers, including those
+            // which do not support HTTPS.
+            .status(StatusCode::MOVED_PERMANENTLY)
+            .header(header::LOCATION, "https://norepi.org")
+            .body(Body::empty())
+    }
+}
+
+struct Https;
+
+impl Protocol for Https {
+    type Incoming = norepi_site_services::tls::Acceptor;
+
+    fn incoming() -> hyper::Result<Self::Incoming> {
+        norepi_site_services::tls::Acceptor::bind(443)
+    }
+
+    fn addr_stream(stream: &<Self::Incoming as hyper::server::accept::Accept>::Conn) -> &AddrStream {
+        stream.get_ref().0
+    }
+
+    fn respond_to_request(req: Request<Body>) -> Result<Response<Body>, http::Error> {
+        // `req.uri()` is really a *request-target* as specified by Section 5.3 of RFC 7230; see
+        // <https://httpwg.org/specs/rfc7230.html#request-target>.
+        let req_target = req.uri();
+        tracing::debug!("{} {}", req.method(), req_target);
+
+        if target_is_malicious(req_target) {
+            tracing::warn!("request is probably malicious");
+
+            // TODO: in the future, this may incur a suspension or ban.
+            return Response::builder().status(StatusCode::IM_A_TEAPOT).body(Body::empty());
         }
-        // RFC 9110, Section 9.3.7:
-        //   The OPTIONS method request information about the communication options available for
-        //   the target resource, at either the origin server or an intervening intermediary.
-        //   ...
-        //   A server generating a successful response to OPTIONS SHOULD send any header that might
-        //   indicate optional features implemented by the server and applicable to the target
-        //   resource (e.g., Allow), including potential extensions not defined by this
-        //   specification.
-        //
-        // See <https://httpwg.org/specs/rfc9110.html#rfc.section.9.3.7>.
-        &Method::OPTIONS => {
-            let response = Response::builder().status(StatusCode::NO_CONTENT);
 
-            // RFC 9110, Section 9.3.7:
-            //   An OPTIONS request with an asterisk ("*") as the request target applies to the
-            //   server in general rather than to a specific resource. Since a server's
-            //   communication options typically depend on the resource, the "*" request is only
-            //   useful as a "ping" or "no-op" type of method; it does nothing beyond allowing the
-            //   client to test the capabilities of the server.
-            if req_target.path().as_bytes() == b"*" {
-                response.body(Body::empty())
-            } else {
-                response
-                    // TODO: In the future, not all resources might implement the methods described
-                    // by [`ALLOW`]. We should have a more fine-grained approach.
-                    .header("Allow", ALLOW)
-                    .body(Body::empty())
+        let mut response = match req.method() {
+            // RFC 9110, Section 9.3.1:
+            //   The GET method request transfer of a current selected representation for the target
+            //   resource.
+            //
+            // See <https://httpwg.org/specs/rfc9110.html#rfc.section.9.3.1>.
+            &Method::GET => get(&req),
+            // RFC 9110, Section 9.3.2:
+            //   The HEAD method is identical to GET except that the server MUST NOT send content in
+            //   the response.
+            //   ...
+            //   The server SHOULD send the same header fields in response to a HEAD request as it
+            //   would have sent if the request method had been GET. However, a server MAY omit
+            //   header fields for which a value is determined only while generating the content.
+            //   ...
+            //   ...a response to GET might contain Content-Length and Vary fields, for example,
+            //   that are not generated within a HEAD response. These minor inconsistencies are
+            //   considered preferable to generating and discarding the content for a HEAD request,
+            //   since HEAD is usually requested for the sake of efficiency.
+            //
+            // See <https://httpwg.org/specs/rfc9110.html#rfc.section.9.3.2>.
+            &Method::HEAD => {
+                // TODO: Our approach is to generate a GET response and discard the body and
+                // irrelevant fields, though RFC 9110 indicates that this is not preferred. Is there
+                // a significant performance cost to doing this?
+                get(&req).map(|mut response| {
+                    // Discard the body.
+                    *response.body_mut() = Body::empty();
+                    // TODO: Maybe discard *Content-Length* as well?
+
+                    response
+                })
             }
-        }
-        // RFC 9110, Section 15.5.6:
-        //   The 405 (Method Not Allowed) status code indicates that the method received in the
-        //   request-line is known by the origin server but not supported by the target resource.
-        //   The origin server MUST generate an Allow header field in a 405 response containing a
-        //   list of the target resource's currently supported methods.
+            // RFC 9110, Section 9.3.7:
+            //   The OPTIONS method request information about the communication options available
+            //   for the target resource, at either the origin server or an intervening
+            //   intermediary.
+            //   ...
+            //   A server generating a successful response to OPTIONS SHOULD send any header that
+            //   might indicate optional features implemented by the server and applicable to the
+            //   target resource (e.g., Allow), including potential extensions not defined by this
+            //   specification.
+            //
+            // See <https://httpwg.org/specs/rfc9110.html#rfc.section.9.3.7>.
+            &Method::OPTIONS => {
+                let response = Response::builder().status(StatusCode::NO_CONTENT);
+
+                // RFC 9110, Section 9.3.7:
+                //   An OPTIONS request with an asterisk ("*") as the request target applies to the
+                //   server in general rather than to a specific resource. Since a server's
+                //   communication options typically depend on the resource, the "*" request is only
+                //   useful as a "ping" or "no-op" type of method; it does nothing beyond allowing
+                //   the client to test the capabilities of the server.
+                if req_target.path().as_bytes() == b"*" {
+                    response.body(Body::empty())
+                } else {
+                    response
+                        // TODO: In the future, not all resources might implement the methods
+                        // described by [`ALLOW`]. We should have a more fine-grained approach.
+                        .header(header::ALLOW, ALLOW)
+                        .body(Body::empty())
+                }
+            }
+            // RFC 9110, Section 15.5.6:
+            //   The 405 (Method Not Allowed) status code indicates that the method received in the
+            //   request-line is known by the origin server but not supported by the target
+            //   resource. The origin server MUST generate an Allow header field in a 405 response
+            //   containing a list of the target resource's currently supported methods.
+            //
+            // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.6>.
+            &Method::POST
+            | &Method::PUT
+            | &Method::DELETE
+            | &Method::CONNECT
+            | &Method::TRACE
+            | &Method::PATCH => {
+                resource::include_gen!("405"."html")
+                    .status(StatusCode::METHOD_NOT_ALLOWED)
+                    .header("Allow", ALLOW)
+                    .build()
+                    .response()
+            }
+            // RFC 9110, Section 15.6.2:
+            //   The 501 (Not Implemented) status code indicates that the server does not support
+            //   the functionality required to fulfill the request. This is the appropriate response
+            //   when the server does not recognize the request method and is not capable of
+            //   supporting it  for any resource.
+            //
+            // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.6.2>.
+            _ => {
+                resource::include_gen!("501"."html")
+                    .status(StatusCode::NOT_IMPLEMENTED)
+                    .build()
+                    .response()
+            }
+        }?;
+
+        // Append default response headers.
+
+        let headers = response.headers_mut();
+        // RFC 9110, Section 10.2.4:
+        //   The "Server" header field contains information about the software used by the origin
+        //   server to handle the request.... An origin server MAY generate a Server header field in
+        //   its responses.
         //
-        // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.6>.
-        &Method::POST
-        | &Method::PUT
-        | &Method::DELETE
-        | &Method::CONNECT
-        | &Method::TRACE
-        | &Method::PATCH => {
-            resource::include_gen!("405"."html")
-                .status(StatusCode::METHOD_NOT_ALLOWED)
-                .header("Allow", ALLOW)
-                .build()
-                .response()
-        }
-        // RFC 9110, Section 15.6.2:
-        //   The 501 (Not Implemented) status code indicates that the server does not support the
-        //   functionality required to fulfill the request. This is the appropriate response when
-        //   the server does not recognize the request method and is not capable of supporting it
-        //   for any resource.
+        // See <https://httpwg.org/specs/rfc9110.html#rfc.section.10.2.4>.
+        headers.insert(header::SERVER, HeaderValue::from_static(SERVER));
+        // RFC 6797, Section 6.1:
+        //   The Strict-Transport-Security HTTP response header (STS header field) indicates to a UA
+        //   that it MUST enforce the HSTS Policy in regards to the host emitting the response
+        //   message containing this header field.
         //
-        // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.6.2>.
-        _ => {
-            resource::include_gen!("501"."html")
-                .status(StatusCode::NOT_IMPLEMENTED)
-                .build()
-                .response()
-        }
-    }?;
+        // See <https://www.rfc-editor.org/rfc/rfc6797#section-6.1>.
 
-    // Append default response headers.
+        headers.insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static(
+                // RFC 6797, Section 6.1.1:
+                //   The REQUIRED "max-age" directive specifies the number of seconds, after the
+                //   reception of the STS header field, during which the UA regards the host (from
+                //   whom the message was received) as a Known HSTS Host.
 
-    let headers = response.headers_mut();
-    // RFC 9110, Section 10.2.4:
-    //   The "Server" header field contains information about the software used by the origin server
-    //   to handle the request.... An origin server MAY generate a Server header field in its
-    //   responses.
-    //
-    // See <https://httpwg.org/specs/rfc9110.html#rfc.section.10.2.4>.
-    headers.insert(header::SERVER, HeaderValue::from_static(SERVER));
-    // RFC 6797, Section 6.1:
-    //   The Strict-Transport-Security HTTP response header (STS header field) indicates to a UA
-    //   that it MUST enforce the HSTS Policy in regards to the host emitting the response message
-    //   containing this header field.
-    //
-    // See <https://www.rfc-editor.org/rfc/rfc6797#section-6.1>.
+                // FIXME: we will want to bump this up over time. The recommended end goal is two
+                //  years.
+                "max-age=300",
+            ),
+        );
 
-    // Note: it's OK that we serve this header over both HTTP and HTTPS. Browsers will probably
-    // ignore this header when it is sent over plain HTTP, though.
-    headers.insert(
-        header::STRICT_TRANSPORT_SECURITY,
-        HeaderValue::from_static(
-            // RFC 6797, Section 6.1.1:
-            //   The REQUIRED "max-age" directive specifies the number of seconds, after the
-            //   reception of the STS header field, during which the UA regards the host (from whom
-            //   the message was received) as a Known HSTS Host.
-
-            // FIXME: we will want to bump this up over time. The recommended end goal is two years.
-            "max-age=300",
-        ),
-    );
-
-    Ok(response)
+        Ok(response)
+    }
 }
 
 fn target_is_malicious(uri: &Uri) -> bool {
