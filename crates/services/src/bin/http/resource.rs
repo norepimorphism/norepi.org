@@ -15,13 +15,6 @@ macro_rules! for_file_ext {
     };
 }
 
-/// The content of the file at the given path within the `${OUT_DIR}/gen/` directory.
-macro_rules! include_gen_content {
-    ($filename:expr) => {
-        include_str!(concat!(env!("OUT_DIR"), "/gen/", $filename))
-    };
-}
-
 /// Constructs a new [resource builder](`Builder`) from the file at the given path.
 ///
 /// The MIME type is automatically derived from the file extension.
@@ -30,7 +23,7 @@ macro_rules! include_gen_content {
 macro_rules! include_ {
     ($file_base:tt . $file_ext:tt $(,)?) => {
         $crate::resource::for_file_ext!($file_ext)
-            .content(include_str!(concat!($file_base, ".", $file_ext)))
+            .content(include_bytes!(concat!($file_base, ".", $file_ext)))
     };
 }
 
@@ -41,14 +34,13 @@ macro_rules! include_ {
 macro_rules! include_gen {
     ($file_base:tt . $file_ext:tt $(,)?) => {
         $crate::resource::for_file_ext!($file_ext)
-            .content($crate::resource::include_gen_content!(concat!($file_base, ".", $file_ext)))
+            .content(include_bytes!(concat!(env!("OUT_DIR"), "/gen/", $file_base, ".", $file_ext)))
     };
 }
 
 pub(crate) use for_file_ext;
 pub(crate) use include_;
 pub(crate) use include_gen;
-pub(crate) use include_gen_content;
 
 impl Builder {
     /// Constructs a new builder for a binary resource.
@@ -97,7 +89,7 @@ pub struct Builder {
     charset: Option<&'static str>,
     encoding: Option<&'static str>,
     extra_headers: Vec<(&'static str, &'static str)>,
-    content: Option<&'static str>,
+    content: Option<&'static [u8]>,
     status_code: Option<StatusCode>,
 }
 
@@ -141,8 +133,8 @@ impl Builder {
 
     /// Sets the content of the resource.
     ///
-    /// By default, this is an empty string.
-    pub fn content(mut self, content: &'static str) -> Self {
+    /// By default, this is an empty slice.
+    pub fn content(mut self, content: &'static [u8]) -> Self {
         self.content = Some(content);
 
         self
@@ -192,7 +184,7 @@ pub struct Resource {
     pub encoding: Option<&'static str>,
     pub extra_headers: Vec<(&'static str, &'static str)>,
     /// The content.
-    pub content: &'static str,
+    pub content: &'static [u8],
     /// The HTTP status code to be returned when accessing this resource.
     pub status_code: StatusCode,
 }

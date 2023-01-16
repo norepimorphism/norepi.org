@@ -187,10 +187,10 @@ fn handle_request<P: Protocol>(
                 // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.4>.
                 return resource::Builder::plaintext()
                     .status(StatusCode::FORBIDDEN)
-                    .content(concat!(
-                        "You are blocked from accessing norepi.org and its subdomains. If you",
-                        " think this is a mistake, please shoot an email to norepi@protonmail.com.",
-                    ))
+                    .content(
+                        b"You are blocked from accessing norepi.org and its subdomains. If you \
+                        think this is a mistake, please shoot an email to norepi@protonmail.com.",
+                    )
                     .build()
                     .response();
             }
