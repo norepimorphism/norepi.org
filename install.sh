@@ -1,7 +1,7 @@
 #!/bin/sh
 
 install_crate() {
-    sudo "RUSTUP_HOME=${RUSTUP_HOME}" \
+    sudo "RUSTUP_HOME=${HOME}/.rustup" \
         `which cargo` install --root /usr/local/bin --path "crates/${1}"
 }
 
