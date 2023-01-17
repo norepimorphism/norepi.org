@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::fmt;
+//! Logical files accessible through `GET` or `HEAD` requests at one or more URIs.
+
+use std::{fmt, iter};
 
 use hyper::{header::{self, HeaderValue}, http, Body, Request, Response, StatusCode};
 
@@ -8,7 +10,7 @@ pub mod mime;
 
 /// Constructs a new [resource builder](`Builder`) for a file with the given extension.
 ///
-/// The MIME type is automatically derived from the file extension.
+/// The MIME media type is automatically derived from the file extension.
 macro_rules! for_file_ext {
     ($ext:tt) => {
         $crate::resource::Builder::new($crate::resource::mime::from_file_ext!($ext))
@@ -17,7 +19,7 @@ macro_rules! for_file_ext {
 
 /// Constructs a new [resource builder](`Builder`) from the file at the given path.
 ///
-/// The MIME type is automatically derived from the file extension.
+/// The MIME media type is automatically derived from the file extension.
 //
 // TODO: find a better name
 macro_rules! include_ {
@@ -30,7 +32,7 @@ macro_rules! include_ {
 /// Constructs a new [resource builder](`Builder`) from the file at the given path within the
 /// `${OUT_DIR}/gen/` directory.
 ///
-/// The MIME type is automatically derived from the file extension.
+/// The MIME media type is automatically derived from the file extension.
 macro_rules! include_gen {
     ($file_base:tt . $file_ext:tt $(,)?) => {
         $crate::resource::for_file_ext!($file_ext)
@@ -43,35 +45,15 @@ pub(crate) use include_;
 pub(crate) use include_gen;
 
 impl Builder {
-    /// Constructs a new builder for a binary resource.
-    pub fn binary() -> Self {
-        Self::new(mime::BINARY)
-    }
-
-    /// Constructs a new builder for a CSS resource.
-    pub fn css() -> Self {
-        Self::new(mime::CSS)
-    }
-
-    /// Constructs a new builder for an HTML resource.
-    pub fn html() -> Self {
-        Self::new(mime::HTML)
-    }
-
     /// Constructs a new builder for a plaintext resource.
     pub fn plaintext() -> Self {
-        Self::new(mime::PLAINTEXT)
+        Self::new(mime::Type::PLAINTEXT)
     }
 
-    /// Constructs a new builder for a resource with the given MIME type.
-    ///
-    /// The MIME type should be of the form `type "/" subtype` as specified by [Section 8.3.1] of
-    /// RFC 9110.
-    ///
-    /// [Section 8.3.1]: https://httpwg.org/specs/rfc9110.html#rfc.section.8.3.1
-    pub fn new(mime_type: &'static str) -> Self {
+    /// Constructs a new builder for a resource with the given MIME media type.
+    pub fn new(media_type: mime::Type<'static>) -> Self {
         Self {
-            mime_type,
+            media_type,
             language: None,
             charset: None,
             encoding: None,
@@ -84,7 +66,7 @@ impl Builder {
 
 /// A builder for a [`Resource`].
 pub struct Builder {
-    mime_type: &'static str,
+    media_type: mime::Type<'static>,
     language: Option<&'static str>,
     charset: Option<&'static str>,
     encoding: Option<&'static str>,
@@ -96,7 +78,7 @@ pub struct Builder {
 impl Builder {
     /// Sets the language tag of the resource.
     ///
-    /// By default, this is `"en"`.
+    /// By default, this is `en` for textual resources and unset otherwise.
     ///
     /// Language tags are described in [RFC 5646].
     ///
@@ -109,7 +91,7 @@ impl Builder {
 
     /// Sets the character set, or *charset*, of the resource.
     ///
-    /// By default, this is `"utf-8"`.
+    /// By default, this is `utf-8` for textual resources and unset otherwise.
     pub fn charset(mut self, charset: &'static str) -> Self {
         self.charset = Some(charset);
 
@@ -118,13 +100,14 @@ impl Builder {
 
     /// Sets the content coding of the resource.
     ///
-    /// By default, this is `None`.
+    /// By default, this is unset.
     pub fn encoding(mut self, encoding: &'static str) -> Self {
         self.encoding = Some(encoding);
 
         self
     }
 
+    /// Appends a response header to the resource.
     pub fn header(mut self, name: &'static str, value: &'static str) -> Self {
         self.extra_headers.push((name, value));
 
@@ -151,10 +134,15 @@ impl Builder {
 
     /// Constructs a resource from this builder, consuming it in the process.
     pub fn build(self) -> Resource {
+        let is_textual = matches!(self.media_type.top, mime::TopLevel::Text);
+        let or_textual_default = |option: Option<&'static str>, default| {
+            option.or_else(|| if is_textual { Some(default) } else { None })
+        };
+
         Resource {
-            mime_type: self.mime_type,
-            language: self.language.unwrap_or("en"),
-            charset: self.charset.unwrap_or("utf-8"),
+            media_type: self.media_type,
+            language: or_textual_default(self.language, "en"),
+            charset: or_textual_default(self.charset, "utf-8"),
             encoding: self.encoding,
             extra_headers: self.extra_headers,
             content: self.content.unwrap_or_default(),
@@ -166,20 +154,16 @@ impl Builder {
 /// A logical file that is hosted on the webserver and is accessible through `GET` or `HEAD`
 /// requests at one or more URIs.
 pub struct Resource {
-    /// The MIME type of the content.
-    ///
-    /// This is the form `type "/" subtype` as specified by [Section 8.3.1] of RFC 9110.
-    ///
-    /// [Section 8.3.1]: https://httpwg.org/specs/rfc9110.html#rfc.section.8.3.1
-    pub mime_type: &'static str,
+    /// The MIME media type of the content.
+    pub media_type: mime::Type<'static>,
     /// The language tag that identifies the natural language the content is written in (or for).
     ///
     /// Language tags are described in [RFC 5646].
     ///
     /// [RFC 5646]: https://datatracker.ietf.org/doc/html/rfc5646
-    pub language: &'static str,
+    pub language: Option<&'static str>,
     /// The character set, or *charset*, of the content.
-    pub charset: &'static str,
+    pub charset: Option<&'static str>,
     /// The content coding (e.g., compression), if any.
     pub encoding: Option<&'static str>,
     pub extra_headers: Vec<(&'static str, &'static str)>,
@@ -205,10 +189,14 @@ impl Resource {
             // See <https://httpwg.org/specs/rfc9110.html#rfc.section.8.3>.
             .header(
                 header::CONTENT_TYPE,
-                format!("{};charset={}", self.mime_type, self.charset),
+                iter::once(self.media_type.to_string())
+                    .chain(self.charset.map(|it| format!("charset={it}")))
+                    .collect::<Vec<String>>()
+                    .join(";"),
             )
             // No need to MIME-sniff.
-            .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+            .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+        if let Some(language) = self.language {
             // RFC 9110, Section 8.5:
             //   The "Content-Language" header field describes the natural language(s) of the
             //   intended audience for the representation.
@@ -217,7 +205,9 @@ impl Resource {
             //   documents.
             //
             // See <https://httpwg.org/specs/rfc9110.html#rfc.section.8.5>.
-            .header(header::CONTENT_LANGUAGE, self.language)
+            response = response.header(header::CONTENT_LANGUAGE, language);
+        }
+        let mut response = response
             // RFC 9110, Section 5.2:
             //   The "Cache-Control" header field is used to list directives for caches along the
             //   request/response chain. Cache directives are unidirectional, in that the presence
@@ -308,7 +298,6 @@ impl Resource {
             tracing::warn!("Accept-Charset was received but is deprecated");
 
             if !self.matches_accept_charset(value) {
-                tracing::error!("Accept-Charset header does not request '{}'", self.charset);
                 return not_acceptable();
             }
         }
@@ -332,7 +321,6 @@ impl Resource {
             if !self.matches_accept_encoding(value) {
                 let encoding = self.encoding.unwrap_or("identity");
 
-                tracing::error!("Accept-Encoding header does not request '{}'", encoding);
                 // RFC 9110, Section 12.5.3:
                 //   Servers that fail a request due to an unsupported content coding ought to
                 //   respond with a 415 (Unsupported Media Type) status and include an
@@ -362,7 +350,6 @@ impl Resource {
         // See <https://httpwg.org/specs/rfc9110.html#rfc.section.12.5.4>.
         if let Some(value) = headers.get(header::ACCEPT_LANGUAGE) {
             if !self.matches_accept_language(value) {
-                tracing::error!("Accept-Language header does not request '{}'", self.language);
                 return not_acceptable();
             }
         }
@@ -376,8 +363,13 @@ impl Resource {
             return false;
         };
 
+        let Some(charset) = self.charset else {
+            // We don't specify a charset, so anything is fair game, I guess.
+            return true;
+        };
+
         for pref in prefs {
-            if pref.is_acceptable_with_name(self.charset.as_bytes()) {
+            if pref.is_acceptable_with_name(charset.as_bytes()) {
                 return true;
             }
 
@@ -452,8 +444,13 @@ impl Resource {
             return false;
         };
 
+        let Some(language) = self.language else {
+            // We don't specify a language, so anything is fair game.
+            return true;
+        };
+
         for pref in prefs {
-            if pref.is_acceptable_with_name(self.language.as_bytes()) {
+            if pref.is_acceptable_with_name(language.as_bytes()) {
                 return true;
             }
 

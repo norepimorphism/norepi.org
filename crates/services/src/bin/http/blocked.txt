@@ -1,0 +1,16 @@
+You are blocked from accessing norepi.org and its subdomains.
+
+"I have never visited this website before. How am I blocked?"
+
+  You might be the victim of IP spoofing, where a malicious host accessed norepi.org in your name and triggered automatic abuse detection, blocking your IP address as a result. Or, this may have simply been a mistake on the part of the site administrator.
+
+  In any case, send an email to <norepi@protonmail.com> requesting to be unblocked. Unless there is a compelling reason not to, your request will be honored.
+
+"You blocked my bot. Why did you do that?"
+
+  In general, non-human hosts are permitted to interact with norepi.org unless they are grossly impolite or downright malicious. Your bot is likely to be blocked if:
+    - it does not GET /robots.txt before accessing other resources;
+    - it sends multiple requests per second; or
+    - it sends a malicious request (e.g., to access an admin panel, or which embeds shellcode).
+
+  If you think this was a mistake, send an email to <norepi@protonmail.com>.

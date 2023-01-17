@@ -1,14 +1,14 @@
-# The www.norepi.org Robots Exclusion Standard (colloq. robots.txt).
+# The norepi.org Robots Exclusion Standard (colloq. robots.txt).
 #
 # See <robotstxt.org> for an informal robots.txt specification.
 
-# In general, non-human hosts are permitted to interact with www.norepi.org unless they are grossly
+# In general, non-human hosts are permitted to interact with norepi.org unless they are grossly
 # impolite or downright malicious.
 #
 # As a rule of thumb:
-# - Send a GET request to robots.txt before doing anything else.
+# - GET /robots.txt before doing anything else.
 # - Wait a few milliseconds before sending your next request.
-# - Don't probe for software vulnerabilites, even if you plan to responsibly disclose them. I have
+# - Don't probe for software vulnerabilities, even if you plan to responsibly disclose them. I have
 #   no way of knowing your intentions, and you will probably be banned indefinitely.
 
 User-agent: *

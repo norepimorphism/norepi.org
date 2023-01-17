@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-#![feature(associated_type_bounds, byte_slice_trim_ascii, ip)]
+//! The HTTP(S) service of *norepi.org*.
+
+#![feature(byte_slice_trim_ascii, ip)]
 
 use std::{
     env,
@@ -28,10 +30,10 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 mod resource;
 
-/// The *Server* header of a response to a successful request.
+/// The *Server* response header field to a successful request.
 static SERVER: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
-/// The *Allow* header of a response to a successful `OPTIONS` request.
-static ALLOW: &str = "GET, HEAD, OPTIONS";
+/// The *Allow* response header field to a successful `OPTIONS` request.
+static ALLOW: &str = "GET,HEAD,OPTIONS";
 
 fn main() -> std::process::ExitCode {
     norepi_site_util::run_async(run)
@@ -39,7 +41,6 @@ fn main() -> std::process::ExitCode {
 
 async fn run() -> hyper::Result<()> {
     let mut report = fs::OpenOptions::new()
-        .write(true)
         .append(true)
         .create(true)
         .open(dirs::home_dir().unwrap_or_default().join("http.csv"))
@@ -95,6 +96,7 @@ where
             async move { result }
         }))
         .with_graceful_shutdown(async {
+            // Return from the `serve` function when *SIGINT* is received.
             tokio::signal::ctrl_c()
                 .await
                 .expect("failed to install shutdown signal handler")
@@ -114,6 +116,8 @@ fn create_service<P: Protocol>(
     Future = impl Future<Output = Result<Response<Body>, http::Error>>
 > {
     let remote_addr = stream.remote_addr();
+    // Note: we don't need this anymore, and we can discard it now.
+    drop(stream);
 
     service_fn(move |req| {
         // This closure is invoked for each request, so we need to clone `report` to use it.
@@ -132,6 +136,9 @@ fn handle_request<P: Protocol>(
 ) -> Result<Response<Body>, http::Error> {
     // Acquire the mutex lock.
     let mut report = report.lock().expect("mutex is poisoned");
+
+    // FIXME: this CSV report code is not very robust. We should either improve it or remove it
+    // entirely.
 
     // | Date | IP Address | TCP Port | HTTP Method | Resource URI | User Agent |
     // |------|------------|----------|-------------|--------------|------------|
@@ -165,9 +172,7 @@ fn handle_request<P: Protocol>(
                         Default::default(),
                     ) {
                         tracing::error!(
-                            "failed to insert DB entry for host {}. error: {:#?}",
-                            remote_ip,
-                            e,
+                            "failed to insert DB entry for host {remote_ip}. error: {e:#?}",
                         );
                     }
 
@@ -176,7 +181,7 @@ fn handle_request<P: Protocol>(
             };
 
             if is_blocked {
-                tracing::warn!("request from {} was blocked", remote_ip);
+                tracing::warn!("request from {remote_ip} was blocked");
 
                 // RFC 9110, Section 15.5.4:
                 //   The 403 (Forbidden) status code indicates that the server understood the
@@ -185,24 +190,16 @@ fn handle_request<P: Protocol>(
                 //   any).
                 //
                 // See <https://httpwg.org/specs/rfc9110.html#rfc.section.15.5.4>.
-                return resource::Builder::plaintext()
+                return resource::include_!("blocked"."txt")
                     .status(StatusCode::FORBIDDEN)
-                    .content(
-                        b"You are blocked from accessing norepi.org and its subdomains. If you \
-                        think this is a mistake, please shoot an email to norepi@protonmail.com.",
-                    )
                     .build()
                     .response();
             }
         }
         Err(e) => {
             tracing::error!(
-                concat!(
-                    "failed to check blocklist for host {}; defaulting to allowing request.",
-                    " error: {:#?}",
-                ),
-                remote_ip,
-                e,
+                "failed to check blocklist for host {remote_ip}; defaulting to allowing request. \
+                error: {e:#?}",
             );
         }
     }
@@ -456,8 +453,6 @@ fn get(req: &Request<Body>) -> Result<Response<Body>, http::Error> {
     match resource.is_compatible_with_request(&req) {
         Ok(_) => resource.response(),
         Err(response) => {
-            tracing::error!("content negotiation failed");
-
             // A response containing error information was returned.
             response
         }
