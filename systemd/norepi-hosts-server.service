@@ -6,6 +6,7 @@ Type=simple
 ExecStart=/usr/local/bin/norepi-hosts-server
 Restart=on-failure
 Environment=RUST_LOG=debug
+KillSignal=SIGINT
 
 [Install]
 WantedBy=multi-user.target
